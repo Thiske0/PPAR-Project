@@ -1,4 +1,4 @@
-// mpicc -O3 -o mitm_seq mitm_seq.c
+// mpicc -O3 -march=native -Wall -o mitm_seq mitm_seq.c
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -301,10 +301,10 @@ void process_command_line_options(int argc, char** argv) {
         char url[256];
         sprintf(url, "https://ppar.tme-crypto.fr/mathis.poppe.%d/%llu", version, (unsigned long long)n);
         fprintf(stderr, "Fetching problem from %s\n", url);
-        char filename[256];
+        char filename[128];
         sprintf(filename, "%d_%llu.txt", (int)version, (unsigned long long)n);
 
-        char command[256];
+        char command[512];
         sprintf(command, "curl -s %s > %s", url, filename);
         system(command);
         FILE* f = fopen(filename, "r");
@@ -320,9 +320,9 @@ void process_command_line_options(int argc, char** argv) {
         char line[256];
         while (fgets(line, sizeof(line), f)) {
             if (line[0] == 'C' && line[1] == '0') {
-                sscanf(line, "C0 = (%lx, %lx)", &C[0][0], &C[0][1]);
+                sscanf(line, "C0 = (%d, %d)", &C[0][0], &C[0][1]);
             } else if (line[0] == 'C' && line[1] == '1') {
-                sscanf(line, "C1 = (%lx, %lx)", &C[1][0], &C[1][1]);
+                sscanf(line, "C1 = (%d, %d)", &C[1][0], &C[1][1]);
             }
         }
         fclose(f);
