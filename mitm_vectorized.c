@@ -1,4 +1,4 @@
-// mpicc -O3 -march=native -Wall -o mitm_seq mitm_seq.c
+// mpicc -O3 -march=native -Wall -o mitm_vec mitm_vectorized.c
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -8,6 +8,8 @@
 #include <assert.h>
 #include <getopt.h>
 #include <assert.h>
+
+#define VECTOR_SIZE 16
 
 typedef uint64_t u64;       /* portable 64-bit integer */
 typedef uint32_t u32;       /* portable 32-bit integer */
@@ -43,6 +45,18 @@ u64 murmur64(u64 x) {
     return x;
 }
 
+void murmur64_vectorized(u64 x[VECTOR_SIZE], u64 result[VECTOR_SIZE]) {
+    for (int i = 0; i < VECTOR_SIZE; i++) {
+        u64 val = x[i];
+        val ^= val >> 33;
+        val *= 0xff51afd7ed558ccdull;
+        val ^= val >> 33;
+        val *= 0xc4ceb9fe1a85ec53ull;
+        val ^= val >> 33;
+        result[i] = val;
+    }
+}
+
 /* represent n in 4 bytes */
 void human_format(u64 n, char* target) {
     if (n < 1000) {
@@ -75,12 +89,29 @@ void human_format(u64 n, char* target) {
 #define ER32(x,y,k) (x=ROTR32(x,8), x+=y, x^=k, y=ROTL32(y,3), y^=x)
 #define DR32(x,y,k) (y^=x, y=ROTR32(y,3), x^=k, x-=y, x=ROTL32(x,8))
 
-void Speck64128KeySchedule(const u32 K[], u32 rk[]) {
+void Speck64128KeySchedule(const u32 K[4], u32 rk[]) {
     u32 i, D = K[3], C = K[2], B = K[1], A = K[0];
     for (i = 0;i < 27;) {
         rk[i] = A; ER32(B, A, i++);
         rk[i] = A; ER32(C, A, i++);
         rk[i] = A; ER32(D, A, i++);
+    }
+}
+
+void Speck64128KeySchedule_vectorized(u32 K[4][VECTOR_SIZE], u32 rk[27][VECTOR_SIZE]) {
+    for (u32 i = 0;i < 27;) {
+        for (int vi = 0; vi < VECTOR_SIZE; vi++) {
+            rk[i][vi] = K[0][vi]; ER32(K[1][vi], K[0][vi], i);
+        }
+        i++;
+        for (int vi = 0; vi < VECTOR_SIZE; vi++) {
+            rk[i][vi] = K[0][vi]; ER32(K[2][vi], K[0][vi], i);
+        }
+        i++;
+        for (int vi = 0; vi < VECTOR_SIZE; vi++) {
+            rk[i][vi] = K[0][vi]; ER32(K[3][vi], K[0][vi], i);
+        }
+        i++;
     }
 }
 
@@ -91,11 +122,39 @@ void Speck64128Encrypt(const u32 Pt[], u32 Ct[], const u32 rk[]) {
         ER32(Ct[1], Ct[0], rk[i++]);
 }
 
+void Speck64128Encrypt_vectorized(const u32 Pt[2], u32 Ct[2][VECTOR_SIZE], const u32 rk[27][VECTOR_SIZE]) {
+    for (int vi = 0; vi < VECTOR_SIZE; vi++) {
+        Ct[0][vi] = Pt[0];
+        Ct[1][vi] = Pt[1];
+    }
+
+    for (u32 i = 0;i < 27;) {
+        for (int vi = 0; vi < VECTOR_SIZE; vi++) {
+            ER32(Ct[1][vi], Ct[0][vi], rk[i][vi]);
+        }
+        i++;
+    }
+}
+
 void Speck64128Decrypt(u32 Pt[], const u32 Ct[], u32 const rk[]) {
     int i;
     Pt[0] = Ct[0]; Pt[1] = Ct[1];
     for (i = 26;i >= 0;)
         DR32(Pt[1], Pt[0], rk[i--]);
+}
+
+void Speck64128Decrypt_vectorized(u32 Pt[2][VECTOR_SIZE], const u32 Ct[2], u32 const rk[27][VECTOR_SIZE]) {
+    for (int vi = 0; vi < VECTOR_SIZE; vi++) {
+        Pt[0][vi] = Ct[0];
+        Pt[1][vi] = Ct[1];
+    }
+
+    for (int i = 26; i >= 0;) {
+        for (int vi = 0; vi < VECTOR_SIZE; vi++) {
+            DR32(Pt[1][vi], Pt[0][vi], rk[i][vi]);
+        }
+        i--;
+    }
 }
 
 /******************************** dictionary ********************************/
@@ -126,8 +185,8 @@ void dict_setup(u64 size) {
 }
 
 /* Insert the binding key |----> value in the dictionnary */
-void dict_insert(u64 key, u64 value) {
-    u64 h = murmur64(key) % dict_size;
+void dict_insert_hash(u64 hash, u64 key, u64 value) {
+    u64 h = hash % dict_size;
     for (;;) {
         if (A[h].k == EMPTY)
             break;
@@ -140,14 +199,20 @@ void dict_insert(u64 key, u64 value) {
     A[h].v = value;
 }
 
+/* Insert the binding key |----> value in the dictionnary */
+void dict_insert(u64 key, u64 value) {
+    u64 h = murmur64(key) % dict_size;
+    dict_insert_hash(h, key, value);
+}
+
 /* Query the dictionnary with this `key`.  Write values (potentially)
  *  matching the key in `values` and return their number. The `values`
  *  array must be preallocated of size (at least) `maxval`.
  *  The function returns -1 if there are more than `maxval` results.
  */
-int dict_probe(u64 key, int maxval, u64 values[]) {
+int dict_probe_hash(u64 hash, u64 key, int maxval, u64 values[]) {
+    u64 h = hash % dict_size;
     u32 k = key % PRIME;
-    u64 h = murmur64(key) % dict_size;
     int nval = 0;
     for (;;) {
         if (A[h].k == EMPTY)
@@ -164,6 +229,17 @@ int dict_probe(u64 key, int maxval, u64 values[]) {
     }
 }
 
+/* Query the dictionnary with this `key`.  Write values (potentially)
+ *  matching the key in `values` and return their number. The `values`
+ *  array must be preallocated of size (at least) `maxval`.
+ *  The function returns -1 if there are more than `maxval` results.
+ */
+int dict_probe(u64 key, int maxval, u64 values[]) {
+    u64 h = murmur64(key) % dict_size;
+    return dict_probe_hash(h, key, maxval, values);
+}
+
+
 /***************************** MITM problem ***********************************/
 
 /* f : {0, 1}^n --> {0, 1}^n.  Speck64-128 encryption of P[0], using k */
@@ -177,6 +253,26 @@ u64 f(u64 k) {
     return ((u64)Ct[0] ^ ((u64)Ct[1] << 32)) & mask;
 }
 
+/* f : {0, 1}^n --> {0, 1}^n.  Speck64-128 encryption of P[0], using k */
+void f_vectorized(u64 k, u64 vector[VECTOR_SIZE]) {
+    assert((k & mask) == k);
+
+    u32 K[4][VECTOR_SIZE];
+    for (int i = 0; i < VECTOR_SIZE; i++) {
+        u64 ki = k + i;
+        K[0][i] = ki & 0xffffffff;
+        K[1][i] = ki >> 32;
+        K[2][i] = 0;
+        K[3][i] = 0;
+    }
+    u32 rk[27][VECTOR_SIZE];
+    Speck64128KeySchedule_vectorized(K, rk);
+    u32 Ct[2][VECTOR_SIZE];
+    Speck64128Encrypt_vectorized(P[0], Ct, rk);
+    for (int i = 0; i < VECTOR_SIZE; i++)
+        vector[i] = ((u64)Ct[0][i] ^ ((u64)Ct[1][i] << 32)) & mask;
+}
+
 /* g : {0, 1}^n --> {0, 1}^n.  speck64-128 decryption of C[0], using k */
 u64 g(u64 k) {
     assert((k & mask) == k);
@@ -186,6 +282,26 @@ u64 g(u64 k) {
     u32 Pt[2];
     Speck64128Decrypt(Pt, C[0], rk);
     return ((u64)Pt[0] ^ ((u64)Pt[1] << 32)) & mask;
+}
+
+/* g : {0, 1}^n --> {0, 1}^n.  speck64-128 decryption of C[0], using k */
+void g_vectorized(u64 k, u64 vector[VECTOR_SIZE]) {
+    assert((k & mask) == k);
+
+    u32 K[4][VECTOR_SIZE];
+    for (int i = 0; i < VECTOR_SIZE; i++) {
+        u64 ki = k + i;
+        K[0][i] = ki & 0xffffffff;
+        K[1][i] = ki >> 32;
+        K[2][i] = 0;
+        K[3][i] = 0;
+    }
+    u32 rk[27][VECTOR_SIZE];
+    Speck64128KeySchedule_vectorized(K, rk);
+    u32 Pt[2][VECTOR_SIZE];
+    Speck64128Decrypt_vectorized(Pt, C[0], rk);
+    for (int i = 0; i < VECTOR_SIZE; i++)
+        vector[i] = ((u64)Pt[0][i] ^ ((u64)Pt[1][i] << 32)) & mask;
 }
 
 bool is_good_pair(u64 k1, u64 k2) {
@@ -208,9 +324,16 @@ bool is_good_pair(u64 k1, u64 k2) {
 int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
     double start = wtime();
     u64 N = 1ull << n;
-    for (u64 x = 0; x < N; x++) {
-        u64 z = f(x);
-        dict_insert(z, x);
+    for (u64 x = 0; x < N; x += VECTOR_SIZE) {
+        u64 vector[VECTOR_SIZE];
+        f_vectorized(x, vector);
+        u64 hash[VECTOR_SIZE];
+        murmur64_vectorized(vector, hash);
+        for (int j = 0; j < VECTOR_SIZE; j++) {
+            u64 z = x + j;
+            u64 y = vector[j];
+            dict_insert_hash(hash[j], y, z);
+        }
     }
 
     double mid = wtime();
@@ -219,20 +342,27 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
     int nres = 0;
     u64 ncandidates = 0;
     u64 x[256];
-    for (u64 z = 0; z < N; z++) {
-        u64 y = g(z);
-        int nx = dict_probe(y, 256, x);
-        assert(nx >= 0);
-        ncandidates += nx;
-        for (int i = 0; i < nx; i++)
-            if (is_good_pair(x[i], z)) {
-                if (nres == maxres)
-                    return -1;
-                k1[nres] = x[i];
-                k2[nres] = z;
-                printf("SOLUTION FOUND!\n");
-                nres += 1;
-            }
+    for (u64 zv = 0; zv < N; zv += VECTOR_SIZE) {
+        u64 vector[VECTOR_SIZE];
+        g_vectorized(zv, vector);
+        u64 hash[VECTOR_SIZE];
+        murmur64_vectorized(vector, hash);
+        for (int j = 0; j < VECTOR_SIZE; j++) {
+            u64 z = zv + j;
+            u64 y = vector[j];
+            int nx = dict_probe_hash(hash[j], y, 256, x);
+            assert(nx >= 0);
+            ncandidates += nx;
+            for (int i = 0; i < nx; i++)
+                if (is_good_pair(x[i], z)) {
+                    if (nres == maxres)
+                        return -1;
+                    k1[nres] = x[i];
+                    k2[nres] = z;
+                    printf("SOLUTION FOUND!\n");
+                    nres += 1;
+                }
+        }
     }
     printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
     return nres;

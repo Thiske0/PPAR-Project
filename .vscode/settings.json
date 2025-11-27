@@ -2,6 +2,7 @@
     "files.associations": {
         "startup": "plaintext",
         "assert.h": "c",
-        "time.h": "c"
+        "time.h": "c",
+        "inttypes.h": "c"
     }
 }
