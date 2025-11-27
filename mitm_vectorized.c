@@ -45,7 +45,7 @@ u64 murmur64(u64 x) {
     return x;
 }
 
-void murmur64_vectorized(u64 x[VECTOR_SIZE], u64 result[VECTOR_SIZE]) {
+void murmur64_vectorized(u64* restrict  x, u64* restrict  result) {
     for (int i = 0; i < VECTOR_SIZE; i++) {
         u64 val = x[i];
         val ^= val >> 33;
@@ -98,7 +98,7 @@ void Speck64128KeySchedule(const u32 K[4], u32 rk[]) {
     }
 }
 
-void Speck64128KeySchedule_vectorized(u32 K[4][VECTOR_SIZE], u32 rk[27][VECTOR_SIZE]) {
+void Speck64128KeySchedule_vectorized(u32(*restrict K)[VECTOR_SIZE], u32(*restrict rk)[VECTOR_SIZE]) {
     for (u32 i = 0;i < 27;) {
         for (int vi = 0; vi < VECTOR_SIZE; vi++) {
             rk[i][vi] = K[0][vi]; ER32(K[1][vi], K[0][vi], i);
@@ -122,7 +122,7 @@ void Speck64128Encrypt(const u32 Pt[], u32 Ct[], const u32 rk[]) {
         ER32(Ct[1], Ct[0], rk[i++]);
 }
 
-void Speck64128Encrypt_vectorized(const u32 Pt[2], u32 Ct[2][VECTOR_SIZE], const u32 rk[27][VECTOR_SIZE]) {
+void Speck64128Encrypt_vectorized(const u32 Pt[2], u32(*restrict Ct)[VECTOR_SIZE], const u32(*restrict rk)[VECTOR_SIZE]) {
     for (int vi = 0; vi < VECTOR_SIZE; vi++) {
         Ct[0][vi] = Pt[0];
         Ct[1][vi] = Pt[1];
@@ -143,7 +143,7 @@ void Speck64128Decrypt(u32 Pt[], const u32 Ct[], u32 const rk[]) {
         DR32(Pt[1], Pt[0], rk[i--]);
 }
 
-void Speck64128Decrypt_vectorized(u32 Pt[2][VECTOR_SIZE], const u32 Ct[2], u32 const rk[27][VECTOR_SIZE]) {
+void Speck64128Decrypt_vectorized(u32(*restrict Pt)[VECTOR_SIZE], const u32 Ct[2], u32 const rk[27][VECTOR_SIZE]) {
     for (int vi = 0; vi < VECTOR_SIZE; vi++) {
         Pt[0][vi] = Ct[0];
         Pt[1][vi] = Ct[1];
