@@ -3,6 +3,8 @@
         "startup": "plaintext",
         "assert.h": "c",
         "time.h": "c",
-        "inttypes.h": "c"
+        "inttypes.h": "c",
+        "stdbool.h": "c",
+        "stdlib.h": "c"
     }
 }
