@@ -10,7 +10,20 @@
 #include <assert.h>
 #include <omp.h>
 
+#ifdef __AVX512F__ 
+#define VECTOR_SIZE 32
+#else
+#ifdef __AVX2__
 #define VECTOR_SIZE 16
+#else
+#ifdef __AVX__
+#define VECTOR_SIZE 8
+#else
+#define VECTOR_SIZE 1
+#endif
+#endif
+#endif
+
 
 typedef uint64_t u64;       /* portable 64-bit integer */
 typedef uint32_t u32;       /* portable 32-bit integer */
@@ -189,7 +202,7 @@ void dict_setup(u64 size) {
 void dict_insert_hash(u64 hash, u64 key, u64 value) {
     u64 h = hash % dict_size;
     u32 expected = EMPTY;
-    while(!__atomic_compare_exchange_n(&A[h].k, &expected, key % PRIME, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    while (!__atomic_compare_exchange_n(&A[h].k, &expected, key % PRIME, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
         expected = EMPTY;
         h += 1;
         if (h == dict_size)
@@ -323,7 +336,7 @@ bool is_good_pair(u64 k1, u64 k2) {
 int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
     double start = wtime();
     u64 N = 1ull << n;
-    #pragma omp parallel for schedule(dynamic, 4096)
+#pragma omp parallel for schedule(dynamic, 4096)
     for (u64 x = 0; x < N; x += VECTOR_SIZE) {
         u64 vector[VECTOR_SIZE];
         f_vectorized(x, vector);
@@ -341,7 +354,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
 
     int nres = 0;
     u64 ncandidates = 0;
-    #pragma omp parallel for schedule(dynamic, 4096) reduction(+:ncandidates)
+#pragma omp parallel for schedule(dynamic, 4096) reduction(+:ncandidates)
     for (u64 zv = 0; zv < N; zv += VECTOR_SIZE) {
         u64 x[256];
         u64 vector[VECTOR_SIZE];
@@ -356,7 +369,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
             ncandidates += nx;
             for (int i = 0; i < nx; i++)
                 if (is_good_pair(x[i], z)) {
-                    #pragma omp critical
+#pragma omp critical
                     {
                         if (nres < maxres) {
                             k1[nres] = x[i];
@@ -369,7 +382,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
         }
     }
     printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
-    if(nres > maxres)
+    if (nres > maxres)
         return -1;
     return nres;
 }
@@ -475,7 +488,7 @@ int main(int argc, char** argv) {
     printf("Running with n=%d, C0=(%08x, %08x) and C1=(%08x, %08x)\n",
         (int)n, C[0][0], C[0][1], C[1][0], C[1][1]);
     int num_threads = omp_get_max_threads();
-    printf("Using %d threads\n", num_threads);
+    printf("Using %d threads and vector size %d\n", num_threads, VECTOR_SIZE);
 
     dict_setup(1.125 * (1ull << n));
 
