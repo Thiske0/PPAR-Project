@@ -633,8 +633,21 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
     if (rank == 0) {
         MPI_Reduce(MPI_IN_PLACE, &ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
         printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
+        int nres_per_process[world_size];
+        MPI_Gather(&nres, 1, MPI_INT, nres_per_process, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        int offsets[world_size];
+        offsets[0] = 0;
+        for (int i = 1; i < world_size; i++) {
+            offsets[i] = offsets[i - 1] + nres_per_process[i - 1];
+        }
+        MPI_Gatherv(MPI_IN_PLACE, nres, MPI_UINT64_T, k1, nres_per_process, offsets, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+        MPI_Gatherv(MPI_IN_PLACE, nres, MPI_UINT64_T, k2, nres_per_process, offsets, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+        nres = offsets[world_size - 1] + nres_per_process[world_size - 1];
     } else {
         MPI_Reduce(&ncandidates, NULL, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Gather(&nres, 1, MPI_INT, NULL, 0, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Gatherv(k1, nres, MPI_UINT64_T, NULL, NULL, NULL, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+        MPI_Gatherv(k2, nres, MPI_UINT64_T, NULL, NULL, NULL, MPI_UINT64_T, 0, MPI_COMM_WORLD);
     }
     if (nres > maxres)
         return -1;
