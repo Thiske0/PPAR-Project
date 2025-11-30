@@ -258,6 +258,23 @@ bool is_good_pair(u64 k1, u64 k2) {
     return (Ct[0] == C[1][0]) && (Ct[1] == C[1][1]);
 }
 
+void verify_good_pairs(u64 z, u64* x, int nx, int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
+    *ncandidates += nx;
+    for (int i = 0; i < nx; i++) {
+        if (is_good_pair(x[i], z)) {
+#pragma omp critical
+            {
+                if (*nres < maxres) {
+                    k1[*nres] = x[i];
+                    k2[*nres] = z;
+                    printf("SOLUTION FOUND!\n");
+                }
+                (*nres) += 1;
+            }
+        }
+    }
+}
+
 /******************************** dictionary ********************************/
 
 /*
@@ -354,13 +371,19 @@ struct buffer_entry** outgoing_request_buffers;
 u32* buffer_indices;
 u32* writers;
 
-void init_buffers() {
-    buffer_indices = malloc(world_size * sizeof(*buffer_indices));
-    writers = malloc(world_size * sizeof(*writers));
+void reset_buffers() {
     for (int i = 0; i < world_size; i++) {
         buffer_indices[i] = 0;
         writers[i] = 0;
     }
+    for (int i = 0; i < BSEND_AMOUNT; i++) {
+        requests[i] = MPI_REQUEST_NULL;
+    }
+}
+
+void init_buffers() {
+    buffer_indices = malloc(world_size * sizeof(*buffer_indices));
+    writers = malloc(world_size * sizeof(*writers));
 
     buffers = malloc(world_size * sizeof(*buffers));
     for (int i = 0; i < world_size; i++) {
@@ -370,9 +393,10 @@ void init_buffers() {
     requests = malloc(BSEND_AMOUNT * sizeof(*requests));
     outgoing_request_buffers = malloc(BSEND_AMOUNT * sizeof(*outgoing_request_buffers));
     for (int i = 0; i < BSEND_AMOUNT; i++) {
-        requests[i] = MPI_REQUEST_NULL;
         outgoing_request_buffers[i] = malloc(BUFFER_SIZE * sizeof(**buffers));
     }
+
+    reset_buffers();
 }
 
 int send_index = 0;
@@ -472,6 +496,25 @@ void try_recieve_insert_buffers() {
     }
 }
 
+void try_recieve_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
+    int flag;
+    MPI_Status status;
+    MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
+    while (flag) {
+        MPI_Recv(buffers[rank], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, status.MPI_SOURCE, status.MPI_TAG,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        // insert entries
+        for (u32 i = 0; i < BUFFER_SIZE; i++) {
+            u64 x[256];
+            int nx = dict_probe_hash(buffers[rank][i].key,
+                ((u64)buffers[rank][i].value.k), 256, x);
+            verify_good_pairs(buffers[rank][i].value.v, x, nx, maxres, k1, k2, nres, ncandidates);
+        }
+
+        MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
+    }
+}
+
 void send_recieve_remaining_insert_buffers() {
     MPI_Request requests[world_size];
     for (u32 i = 0;i < world_size;i++) {
@@ -491,11 +534,41 @@ void send_recieve_remaining_insert_buffers() {
             dict_insert_hash(buffers[rank][j].key,
                 ((u64)buffers[rank][j].value.k), buffers[rank][j].value.v);
         }
-
     }
     //only try to revieve once we know that all sends are posted
     //we know that all are posted becuase we recieved the partial buffers
     try_recieve_insert_buffers();
+    for (u32 i = 0;i < world_size;i++) {
+        if (i == rank) continue;
+        MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
+    }
+}
+
+void send_recieve_remaining_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
+    MPI_Request requests[world_size];
+    for (u32 i = 0;i < world_size;i++) {
+        if (i == rank) continue;
+        int count = buffer_indices[i];
+        MPI_Isend(buffers[i], sizeof(**buffers) * count, MPI_BYTE, i, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, &requests[i]);
+    }
+    for (u32 i = 0;i < world_size;i++) {
+        if (i == rank) continue;
+        MPI_Status status;
+        MPI_Probe(MPI_ANY_SOURCE, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, &status);
+        int count;
+        MPI_Get_count(&status, MPI_BYTE, &count);
+        MPI_Recv(buffers[rank], count, MPI_BYTE, status.MPI_SOURCE, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        u32 nentries = count / sizeof(**buffers);
+        for (u32 j = 0;j < nentries;j++) {
+            u64 x[256];
+            int nx = dict_probe_hash(buffers[rank][j].key,
+                ((u64)buffers[rank][j].value.k), 256, x);
+            verify_good_pairs(buffers[rank][j].value.v, x, nx, maxres, k1, k2, nres, ncandidates);
+        }
+    }
+    //only try to revieve once we know that all sends are posted
+    //we know that all are posted becuase we recieved the partial buffers
+    try_recieve_probe_buffers(maxres, k1, k2, nres, ncandidates);
     for (u32 i = 0;i < world_size;i++) {
         if (i == rank) continue;
         MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
@@ -510,6 +583,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
     u64 N = 1ull << n;
     assert(N % BUFFER_SIZE == 0);
     assert(BUFFER_SIZE % VECTOR_SIZE == 0);
+
 #pragma omp parallel for schedule(dynamic, 1)
     for (u64 y = rank * BUFFER_SIZE; y < N; y += world_size * BUFFER_SIZE) {
         for (u64 x = 0; x < BUFFER_SIZE; x += VECTOR_SIZE) {
@@ -525,7 +599,10 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
         }
         try_recieve_insert_buffers();
     }
+
     send_recieve_remaining_insert_buffers();
+    MPI_Barrier(MPI_COMM_WORLD);
+    reset_buffers();
 
     double mid = wtime();
     if (rank == 0) {
@@ -534,35 +611,25 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
 
     int nres = 0;
     u64 ncandidates = 0;
-#pragma omp parallel for schedule(dynamic, 4096) reduction(+:ncandidates)
-    for (u64 zv = 0; zv < N; zv += VECTOR_SIZE) {
-        u64 x[256];
-        u64 vector[VECTOR_SIZE];
-        g_vectorized(zv, vector);
-        u64 hash[VECTOR_SIZE];
-        murmur64_vectorized(vector, hash);
-        for (int j = 0; j < VECTOR_SIZE; j++) {
-            u64 z = zv + j;
-            u64 y = vector[j];
-            if (hash[j] % world_size != rank)
-                continue;
-            int nx = dict_probe_hash(hash[j] / world_size, y, 256, x);
-            assert(nx >= 0);
-            ncandidates += nx;
-            for (int i = 0; i < nx; i++)
-                if (is_good_pair(x[i], z)) {
-#pragma omp critical
-                    {
-                        if (nres < maxres) {
-                            k1[nres] = x[i];
-                            k2[nres] = z;
-                            printf("SOLUTION FOUND!\n");
-                        }
-                        nres += 1;
-                    }
-                }
+#pragma omp parallel for schedule(dynamic, 1) reduction(+:ncandidates)
+    for (u64 y = rank * BUFFER_SIZE; y < N; y += world_size * BUFFER_SIZE) {
+        for (u64 zv = 0; zv < BUFFER_SIZE; zv += VECTOR_SIZE) {
+            u64 x[256];
+            u64 vector[VECTOR_SIZE];
+            g_vectorized(y + zv, vector);
+            u64 hash[VECTOR_SIZE];
+            murmur64_vectorized(vector, hash);
+            for (int j = 0; j < VECTOR_SIZE; j++) {
+                u64 z = y + zv + j;
+                u64 y = vector[j];
+                int nx = buffer_probe(hash[j], y, z, 256, x);
+                assert(nx >= 0);
+                verify_good_pairs(z, x, nx, maxres, k1, k2, &nres, &ncandidates);
+            }
         }
+        try_recieve_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
     }
+    send_recieve_remaining_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
     if (rank == 0) {
         MPI_Reduce(MPI_IN_PLACE, &ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
         printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
