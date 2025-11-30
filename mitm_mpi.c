@@ -14,7 +14,7 @@
 
 
 #define BUFFER_SIZE 8192  /* buffer size for each process before sending data over the network */
-#define BSEND_AMOUNT 4000   /* number of buffers that can be sent without waiting for completion */
+#define BSEND_AMOUNT 1000   /* number of buffers that can be sent without waiting for completion */
 
 #ifdef __AVX512F__ 
 #define VECTOR_SIZE 32
@@ -271,9 +271,10 @@ struct buffer_entry {
 };
 
 struct buffer_entry** buffers;
+MPI_Request* requests;
+struct buffer_entry** outgoing_request_buffers;
 u32* buffer_indices;
 u32* writers;
-struct buffer_entry* recieve_buffer;
 
 void init_buffers() {
     buffer_indices = malloc(world_size * sizeof(*buffer_indices));
@@ -287,17 +288,42 @@ void init_buffers() {
     for (int i = 0; i < world_size; i++) {
         buffers[i] = malloc(BUFFER_SIZE * sizeof(**buffers));
     }
-    recieve_buffer = malloc(BUFFER_SIZE * sizeof(*recieve_buffer));
 
-    int size = (BUFFER_SIZE * sizeof(*recieve_buffer) + MPI_BSEND_OVERHEAD) * BSEND_AMOUNT; // probably overkill
-    void* bsend_buf = malloc(size);
-    MPI_Buffer_attach(bsend_buf, size);
+    requests = malloc(BSEND_AMOUNT * sizeof(*requests));
+    outgoing_request_buffers = malloc(BSEND_AMOUNT * sizeof(*outgoing_request_buffers));
+    for (int i = 0; i < BSEND_AMOUNT; i++) {
+        requests[i] = MPI_REQUEST_NULL;
+        outgoing_request_buffers[i] = malloc(BUFFER_SIZE * sizeof(**buffers));
+    }
 }
 
-void swap(int a, int b) {
-    struct buffer_entry* temp = buffers[a];
-    buffers[a] = buffers[b];
-    buffers[b] = temp;
+int send_index = 0;
+void send_buffer(int target) {
+#pragma omp critical
+    {
+        while (true) {
+            int flag;
+            MPI_Status status;
+            MPI_Test(&requests[send_index], &flag, &status);
+            if (flag) {
+                requests[send_index] = MPI_REQUEST_NULL;
+                break;
+            }
+            send_index += 1;
+            if (send_index == BSEND_AMOUNT) {
+                send_index = 0;
+            }
+        }
+        struct buffer_entry* send_buffer = buffers[target];
+        buffers[target] = outgoing_request_buffers[send_index];
+        outgoing_request_buffers[send_index] = send_buffer;
+        MPI_Isend(outgoing_request_buffers[send_index], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, target,
+            FULL_BUFFER_TAG, MPI_COMM_WORLD, &requests[send_index]);
+        send_index += 1;
+        if (send_index == BSEND_AMOUNT) {
+            send_index = 0;
+        }
+    }
 }
 
 void buffer_add(int target, struct buffer_entry entry) {
@@ -326,13 +352,7 @@ void buffer_add(int target, struct buffer_entry entry) {
     }
 
     // send the buffer
-    MPI_Bsend(buffers[target], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, target, FULL_BUFFER_TAG, MPI_COMM_WORLD);
-
-#pragma omp critical
-    {
-        // swap buffer_indices[target]
-        swap(target, rank);
-    }
+    send_buffer(target);
     __atomic_store_n(&buffer_indices[target], 0, __ATOMIC_RELEASE);
     __atomic_fetch_sub(&writers[target], 1, __ATOMIC_RELEASE);
 }
@@ -362,12 +382,12 @@ void try_recieve_buffers() {
     MPI_Status status;
     MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
     while (flag) {
-        MPI_Recv(recieve_buffer, sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, status.MPI_SOURCE, status.MPI_TAG,
+        MPI_Recv(buffers[rank], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, status.MPI_SOURCE, status.MPI_TAG,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         // insert entries
         for (u32 i = 0; i < BUFFER_SIZE; i++) {
-            dict_insert_hash(recieve_buffer[i].key,
-                ((u64)recieve_buffer[i].value.k), recieve_buffer[i].value.v);
+            dict_insert_hash(buffers[rank][i].key,
+                ((u64)buffers[rank][i].value.k), buffers[rank][i].value.v);
         }
 
         MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
@@ -387,11 +407,11 @@ void send_recieve_remaining_buffers() {
         MPI_Probe(MPI_ANY_SOURCE, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, &status);
         int count;
         MPI_Get_count(&status, MPI_BYTE, &count);
-        MPI_Recv(recieve_buffer, count, MPI_BYTE, status.MPI_SOURCE, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(buffers[rank], count, MPI_BYTE, status.MPI_SOURCE, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         u32 nentries = count / sizeof(**buffers);
         for (u32 j = 0;j < nentries;j++) {
-            dict_insert_hash(recieve_buffer[j].key,
-                ((u64)recieve_buffer[j].value.k), recieve_buffer[j].value.v);
+            dict_insert_hash(buffers[rank][j].key,
+                ((u64)buffers[rank][j].value.k), buffers[rank][j].value.v);
         }
 
     }
