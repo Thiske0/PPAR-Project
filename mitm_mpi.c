@@ -48,6 +48,8 @@ u32 C[2][2];
 
 /************************ tools and utility functions *************************/
 
+int world_size, rank;
+
 double wtime() {
     struct timeval ts;
     gettimeofday(&ts, NULL);
@@ -64,7 +66,7 @@ u64 murmur64(u64 x) {
     return x;
 }
 
-void murmur64_vectorized(u64* restrict  x, u32* restrict  result) {
+void murmur64_vectorized(u64* restrict  x, u64* restrict  result) {
     for (int i = 0; i < VECTOR_SIZE; i++) {
         u64 val = x[i];
         val ^= val >> 33;
@@ -72,7 +74,7 @@ void murmur64_vectorized(u64* restrict  x, u32* restrict  result) {
         val ^= val >> 33;
         val *= 0xc4ceb9fe1a85ec53ull;
         val ^= val >> 33;
-        val %= dict_size;
+        val %= (dict_size * world_size);
         result[i] = val;
     }
 }
@@ -191,9 +193,11 @@ static const u64 PRIME = 0xfffffffb;
 /* allocate a hash table with `size` slots (12*size bytes) */
 void dict_setup(u64 size) {
     dict_size = size;
-    char hdsize[8];
-    human_format(dict_size * sizeof(*A), hdsize);
-    printf("Dictionary size: %sB\n", hdsize);
+    if (rank == 0) {
+        char hdsize[8];
+        human_format(dict_size * sizeof(*A), hdsize);
+        printf("Dictionary size: %sB\n", hdsize);
+    }
 
     A = malloc(sizeof(*A) * dict_size);
     if (A == NULL) {
@@ -257,7 +261,8 @@ int dict_probe(u64 key, int maxval, u64 values[]) {
 
 /************************** buffer ****************************/
 
-#define FULL_BUFFER_TAG 0x5
+#define FULL_BUFFER_TAG 0x4
+#define PARTIAL_BUFFER_TAG 0x8
 
 struct buffer_entry {
     u32 key; // 32-bit key (modulo dict_size)
@@ -267,7 +272,7 @@ struct buffer_entry {
 struct buffer_entry** buffers;
 u32* buffer_indices;
 u32* writers;
-int world_size, rank;
+struct buffer_entry* recieve_buffer;
 
 void init_buffers() {
     buffer_indices = malloc(world_size * sizeof(*buffer_indices));
@@ -281,6 +286,17 @@ void init_buffers() {
     for (int i = 0; i < world_size; i++) {
         buffers[i] = malloc(BUFFER_SIZE * sizeof(**buffers));
     }
+    recieve_buffer = malloc(BUFFER_SIZE * sizeof(*recieve_buffer));
+
+    int size = (BUFFER_SIZE * sizeof(*recieve_buffer) + MPI_BSEND_OVERHEAD) * 40; // probably overkill
+    void* bsend_buf = malloc(size);
+    MPI_Buffer_attach(bsend_buf, size);
+}
+
+void swap(int a, int b) {
+    struct buffer_entry* temp = buffers[a];
+    buffers[a] = buffers[b];
+    buffers[b] = temp;
 }
 
 void buffer_add(int target, struct buffer_entry entry) {
@@ -308,38 +324,83 @@ void buffer_add(int target, struct buffer_entry entry) {
         // busy wait
     }
     // send the buffer
-    MPI_Bsend(buffers[target], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, target, FULL_BUFFER_TAG, MPI_COMM_WORLD);
 
-    // swap buffer_indices[target]
 #pragma omp critical
     {
-        swap(buffers[target], buffers[rank]);
+        // swap buffer_indices[target]
+        swap(target, rank);
+        __atomic_store_n(&buffer_indices[target], 0, __ATOMIC_RELEASE);
+        MPI_Bsend(buffers[rank], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, target, FULL_BUFFER_TAG, MPI_COMM_WORLD);
     }
-    __atomic_store_n(&buffer_indices[target], 0, __ATOMIC_RELEASE);
     __atomic_fetch_sub(&writers[target], 1, __ATOMIC_RELEASE);
 }
 
-int buffer_probe(u32 hash, u64 key, int maxval, u64 values[]) {
+int buffer_probe(u64 hash, u64 key, int maxval, u64 values[]) {
     int target = hash % world_size;
     if (target == rank) {
-        return dict_probe_hash(hash, key, maxval, values);
+        return dict_probe_hash(hash / world_size, key, maxval, values);
     }
-    struct buffer_entry entry = { .key = (u32)(hash), .value = {.k = (u32)(key % PRIME), .v = 0 } };
+    struct buffer_entry entry = { .key = (u32)(hash / world_size), .value = {.k = (u32)(key % PRIME), .v = 0 } };
     buffer_add(target, entry);
     return 0;
 }
 
-void buffer_insert(u32 hash, u64 key, u64 value) {
+void buffer_insert(u64 hash, u64 key, u64 value) {
     int target = hash % world_size;
     if (target == rank) {
-        dict_insert_hash(hash, key, value);
+        dict_insert_hash(hash / world_size, key, value);
         return;
     }
-    struct buffer_entry entry = { .key = (u32)(hash), .value = {.k = (u32)(key % PRIME), .v = value } };
+    struct buffer_entry entry = { .key = (u32)(hash / world_size), .value = {.k = (u32)(key % PRIME), .v = value } };
     buffer_add(target, entry);
 }
 
+void try_recieve_buffers() {
+    int flag;
+    MPI_Status status;
+    MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
+    while (flag) {
+        MPI_Recv(recieve_buffer, sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, status.MPI_SOURCE, status.MPI_TAG,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        // insert entries
+        for (u32 i = 0; i < BUFFER_SIZE; i++) {
+            dict_insert_hash(recieve_buffer[i].key,
+                ((u64)recieve_buffer[i].value.k), recieve_buffer[i].value.v);
+        }
 
+        MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
+    }
+}
+
+void send_recieve_remaining_buffers() {
+    MPI_Request requests[world_size];
+    for (u32 i = 0;i < world_size;i++) {
+        if (i == rank) continue;
+        int count = buffer_indices[i];
+        MPI_Isend(buffers[i], sizeof(**buffers) * count, MPI_BYTE, i, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, &requests[i]);
+    }
+    for (u32 i = 0;i < world_size;i++) {
+        if (i == rank) continue;
+        MPI_Status status;
+        MPI_Probe(MPI_ANY_SOURCE, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, &status);
+        int count;
+        MPI_Get_count(&status, MPI_BYTE, &count);
+        MPI_Recv(recieve_buffer, count, MPI_BYTE, status.MPI_SOURCE, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        u32 nentries = count / sizeof(**buffers);
+        for (u32 j = 0;j < nentries;j++) {
+            dict_insert_hash(recieve_buffer[j].key,
+                ((u64)recieve_buffer[j].value.k), recieve_buffer[j].value.v);
+        }
+
+    }
+    //only try to revieve once we know that all sends are posted
+    //we know that all are posted becuase we recieved the partial buffers
+    try_recieve_buffers();
+    for (u32 i = 0;i < world_size;i++) {
+        if (i == rank) continue;
+        MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
+    }
+}
 
 
 /***************************** MITM problem ***********************************/
@@ -426,21 +487,29 @@ bool is_good_pair(u64 k1, u64 k2) {
 int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
     double start = wtime();
     u64 N = 1ull << n;
-#pragma omp parallel for schedule(dynamic, 4096)
-    for (u64 x = 0; x < N; x += VECTOR_SIZE) {
-        u64 vector[VECTOR_SIZE];
-        f_vectorized(x, vector);
-        u64 hash[VECTOR_SIZE];
-        murmur64_vectorized(vector, hash);
-        for (int j = 0; j < VECTOR_SIZE; j++) {
-            u64 z = x + j;
-            u64 y = vector[j];
-            dict_insert_hash(hash[j], y, z);
+    assert(N % BUFFER_SIZE == 0);
+    assert(BUFFER_SIZE % VECTOR_SIZE == 0);
+#pragma omp parallel for schedule(dynamic, 1)
+    for (u64 y = rank * BUFFER_SIZE; y < N; y += world_size * BUFFER_SIZE) {
+        for (u64 x = 0; x < BUFFER_SIZE; x += VECTOR_SIZE) {
+            u64 vector[VECTOR_SIZE];
+            f_vectorized(y + x, vector);
+            u64 hash[VECTOR_SIZE];
+            murmur64_vectorized(vector, hash);
+            for (int j = 0; j < VECTOR_SIZE; j++) {
+                u64 z = y + x + j;
+                u64 y = vector[j];
+                buffer_insert(hash[j], y, z);
+            }
         }
+        try_recieve_buffers();
     }
+    send_recieve_remaining_buffers();
 
     double mid = wtime();
-    printf("Fill: %.1fs\n", mid - start);
+    if (rank == 0) {
+        printf("Fill: %.1fs\n", mid - start);
+    }
 
     int nres = 0;
     u64 ncandidates = 0;
@@ -454,7 +523,9 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
         for (int j = 0; j < VECTOR_SIZE; j++) {
             u64 z = zv + j;
             u64 y = vector[j];
-            int nx = dict_probe_hash(hash[j], y, 256, x);
+            if (hash[j] % world_size != rank)
+                continue;
+            int nx = dict_probe_hash(hash[j] / world_size, y, 256, x);
             assert(nx >= 0);
             ncandidates += nx;
             for (int i = 0; i < nx; i++)
@@ -471,7 +542,12 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
                 }
         }
     }
-    printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
+    if (rank == 0) {
+        MPI_Reduce(MPI_IN_PLACE, &ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+        printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
+    } else {
+        MPI_Reduce(&ncandidates, NULL, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+    }
     if (nres > maxres)
         return -1;
     return nres;
@@ -533,14 +609,14 @@ void process_command_line_options(int argc, char** argv) {
         usage(argv);
         exit(1);
     }
-    if (online) {
+    if (online && rank == 0) {
         /* fetch problem from server */
         srand(time(NULL));
         rand();
         int version = rand() % 1000;
         char url[256];
         sprintf(url, "https://ppar.tme-crypto.fr/mathis.poppe.%d/%llu", version, (unsigned long long)n);
-        fprintf(stderr, "Fetching problem from %s\n", url);
+        printf("Fetching problem from %s\n", url);
         char filename[128];
         sprintf(filename, "%d_%llu.txt", (int)version, (unsigned long long)n);
 
@@ -569,6 +645,10 @@ void process_command_line_options(int argc, char** argv) {
         // remove file
         remove(filename);
     }
+    if (online) {
+        // broadcast C0 and C1 to all processes
+        MPI_Bcast(&C[0][0], 4, MPI_UINT32_T, 0, MPI_COMM_WORLD);
+    }
 }
 
 /******************************************************************************/
@@ -587,14 +667,14 @@ int main(int argc, char** argv) {
     }
 
     dict_setup(1.125 * (1ull << n) / world_size);
-    init_buffers(world_size, rank);
+    init_buffers();
 
     /* search */
     u64 k1[16], k2[16];
     int nkey = golden_claw_search(16, k1, k2);
-    assert(nkey > 0);
 
     if (rank == 0) {
+        //assert(nkey > 0);
         /* validation */
         for (int i = 0; i < nkey; i++) {
             assert(f(k1[i]) == g(k2[i]));
