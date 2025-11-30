@@ -180,6 +180,84 @@ void Speck64128Decrypt_vectorized(u32(*restrict Pt)[VECTOR_SIZE], const u32 Ct[2
     }
 }
 
+/***************************** MITM problem ***********************************/
+
+/* f : {0, 1}^n --> {0, 1}^n.  Speck64-128 encryption of P[0], using k */
+u64 f(u64 k) {
+    assert((k & mask) == k);
+    u32 K[4] = { k & 0xffffffff, k >> 32, 0, 0 };
+    u32 rk[27];
+    Speck64128KeySchedule(K, rk);
+    u32 Ct[2];
+    Speck64128Encrypt(P[0], Ct, rk);
+    return ((u64)Ct[0] ^ ((u64)Ct[1] << 32)) & mask;
+}
+
+/* f : {0, 1}^n --> {0, 1}^n.  Speck64-128 encryption of P[0], using k */
+void f_vectorized(u64 k, u64 vector[VECTOR_SIZE]) {
+    assert((k & mask) == k);
+
+    u32 K[4][VECTOR_SIZE];
+    for (int i = 0; i < VECTOR_SIZE; i++) {
+        u64 ki = k + i;
+        K[0][i] = ki & 0xffffffff;
+        K[1][i] = ki >> 32;
+        K[2][i] = 0;
+        K[3][i] = 0;
+    }
+    u32 rk[27][VECTOR_SIZE];
+    Speck64128KeySchedule_vectorized(K, rk);
+    u32 Ct[2][VECTOR_SIZE];
+    Speck64128Encrypt_vectorized(P[0], Ct, rk);
+    for (int i = 0; i < VECTOR_SIZE; i++)
+        vector[i] = ((u64)Ct[0][i] ^ ((u64)Ct[1][i] << 32)) & mask;
+}
+
+/* g : {0, 1}^n --> {0, 1}^n.  speck64-128 decryption of C[0], using k */
+u64 g(u64 k) {
+    assert((k & mask) == k);
+    u32 K[4] = { k & 0xffffffff, k >> 32, 0, 0 };
+    u32 rk[27];
+    Speck64128KeySchedule(K, rk);
+    u32 Pt[2];
+    Speck64128Decrypt(Pt, C[0], rk);
+    return ((u64)Pt[0] ^ ((u64)Pt[1] << 32)) & mask;
+}
+
+/* g : {0, 1}^n --> {0, 1}^n.  speck64-128 decryption of C[0], using k */
+void g_vectorized(u64 k, u64 vector[VECTOR_SIZE]) {
+    assert((k & mask) == k);
+
+    u32 K[4][VECTOR_SIZE];
+    for (int i = 0; i < VECTOR_SIZE; i++) {
+        u64 ki = k + i;
+        K[0][i] = ki & 0xffffffff;
+        K[1][i] = ki >> 32;
+        K[2][i] = 0;
+        K[3][i] = 0;
+    }
+    u32 rk[27][VECTOR_SIZE];
+    Speck64128KeySchedule_vectorized(K, rk);
+    u32 Pt[2][VECTOR_SIZE];
+    Speck64128Decrypt_vectorized(Pt, C[0], rk);
+    for (int i = 0; i < VECTOR_SIZE; i++)
+        vector[i] = ((u64)Pt[0][i] ^ ((u64)Pt[1][i] << 32)) & mask;
+}
+
+bool is_good_pair(u64 k1, u64 k2) {
+    u32 Ka[4] = { k1 & 0xffffffff, k1 >> 32, 0, 0 };
+    u32 Kb[4] = { k2 & 0xffffffff, k2 >> 32, 0, 0 };
+    u32 rka[27];
+    u32 rkb[27];
+    Speck64128KeySchedule(Ka, rka);
+    Speck64128KeySchedule(Kb, rkb);
+    u32 mid[2];
+    u32 Ct[2];
+    Speck64128Encrypt(P[1], mid, rka);
+    Speck64128Encrypt(mid, Ct, rkb);
+    return (Ct[0] == C[1][0]) && (Ct[1] == C[1][1]);
+}
+
 /******************************** dictionary ********************************/
 
 /*
@@ -422,85 +500,6 @@ void send_recieve_remaining_buffers() {
         if (i == rank) continue;
         MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
     }
-}
-
-
-/***************************** MITM problem ***********************************/
-
-/* f : {0, 1}^n --> {0, 1}^n.  Speck64-128 encryption of P[0], using k */
-u64 f(u64 k) {
-    assert((k & mask) == k);
-    u32 K[4] = { k & 0xffffffff, k >> 32, 0, 0 };
-    u32 rk[27];
-    Speck64128KeySchedule(K, rk);
-    u32 Ct[2];
-    Speck64128Encrypt(P[0], Ct, rk);
-    return ((u64)Ct[0] ^ ((u64)Ct[1] << 32)) & mask;
-}
-
-/* f : {0, 1}^n --> {0, 1}^n.  Speck64-128 encryption of P[0], using k */
-void f_vectorized(u64 k, u64 vector[VECTOR_SIZE]) {
-    assert((k & mask) == k);
-
-    u32 K[4][VECTOR_SIZE];
-    for (int i = 0; i < VECTOR_SIZE; i++) {
-        u64 ki = k + i;
-        K[0][i] = ki & 0xffffffff;
-        K[1][i] = ki >> 32;
-        K[2][i] = 0;
-        K[3][i] = 0;
-    }
-    u32 rk[27][VECTOR_SIZE];
-    Speck64128KeySchedule_vectorized(K, rk);
-    u32 Ct[2][VECTOR_SIZE];
-    Speck64128Encrypt_vectorized(P[0], Ct, rk);
-    for (int i = 0; i < VECTOR_SIZE; i++)
-        vector[i] = ((u64)Ct[0][i] ^ ((u64)Ct[1][i] << 32)) & mask;
-}
-
-/* g : {0, 1}^n --> {0, 1}^n.  speck64-128 decryption of C[0], using k */
-u64 g(u64 k) {
-    assert((k & mask) == k);
-    u32 K[4] = { k & 0xffffffff, k >> 32, 0, 0 };
-    u32 rk[27];
-    Speck64128KeySchedule(K, rk);
-    u32 Pt[2];
-    Speck64128Decrypt(Pt, C[0], rk);
-    return ((u64)Pt[0] ^ ((u64)Pt[1] << 32)) & mask;
-}
-
-/* g : {0, 1}^n --> {0, 1}^n.  speck64-128 decryption of C[0], using k */
-void g_vectorized(u64 k, u64 vector[VECTOR_SIZE]) {
-    assert((k & mask) == k);
-
-    u32 K[4][VECTOR_SIZE];
-    for (int i = 0; i < VECTOR_SIZE; i++) {
-        u64 ki = k + i;
-        K[0][i] = ki & 0xffffffff;
-        K[1][i] = ki >> 32;
-        K[2][i] = 0;
-        K[3][i] = 0;
-    }
-    u32 rk[27][VECTOR_SIZE];
-    Speck64128KeySchedule_vectorized(K, rk);
-    u32 Pt[2][VECTOR_SIZE];
-    Speck64128Decrypt_vectorized(Pt, C[0], rk);
-    for (int i = 0; i < VECTOR_SIZE; i++)
-        vector[i] = ((u64)Pt[0][i] ^ ((u64)Pt[1][i] << 32)) & mask;
-}
-
-bool is_good_pair(u64 k1, u64 k2) {
-    u32 Ka[4] = { k1 & 0xffffffff, k1 >> 32, 0, 0 };
-    u32 Kb[4] = { k2 & 0xffffffff, k2 >> 32, 0, 0 };
-    u32 rka[27];
-    u32 rkb[27];
-    Speck64128KeySchedule(Ka, rka);
-    Speck64128KeySchedule(Kb, rkb);
-    u32 mid[2];
-    u32 Ct[2];
-    Speck64128Encrypt(P[1], mid, rka);
-    Speck64128Encrypt(mid, Ct, rkb);
-    return (Ct[0] == C[1][0]) && (Ct[1] == C[1][1]);
 }
 
 /******************************************************************************/
