@@ -435,12 +435,12 @@ void buffer_add(int target, struct buffer_entry entry) {
     __atomic_fetch_sub(&writers[target], 1, __ATOMIC_RELEASE);
 }
 
-int buffer_probe(u64 hash, u64 key, int maxval, u64 values[]) {
+int buffer_probe(u64 hash, u64 key, u64 value, int maxval, u64 values[]) {
     int target = hash % world_size;
     if (target == rank) {
         return dict_probe_hash(hash / world_size, key, maxval, values);
     }
-    struct buffer_entry entry = { .key = (u32)(hash / world_size), .value = {.k = (u32)(key % PRIME), .v = 0 } };
+    struct buffer_entry entry = { .key = (u32)(hash / world_size), .value = {.k = (u32)(key % PRIME), .v = value } };
     buffer_add(target, entry);
     return 0;
 }
@@ -455,7 +455,7 @@ void buffer_insert(u64 hash, u64 key, u64 value) {
     buffer_add(target, entry);
 }
 
-void try_recieve_buffers() {
+void try_recieve_insert_buffers() {
     int flag;
     MPI_Status status;
     MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
@@ -472,7 +472,7 @@ void try_recieve_buffers() {
     }
 }
 
-void send_recieve_remaining_buffers() {
+void send_recieve_remaining_insert_buffers() {
     MPI_Request requests[world_size];
     for (u32 i = 0;i < world_size;i++) {
         if (i == rank) continue;
@@ -495,7 +495,7 @@ void send_recieve_remaining_buffers() {
     }
     //only try to revieve once we know that all sends are posted
     //we know that all are posted becuase we recieved the partial buffers
-    try_recieve_buffers();
+    try_recieve_insert_buffers();
     for (u32 i = 0;i < world_size;i++) {
         if (i == rank) continue;
         MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
@@ -523,9 +523,9 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
                 buffer_insert(hash[j], y, z);
             }
         }
-        try_recieve_buffers();
+        try_recieve_insert_buffers();
     }
-    send_recieve_remaining_buffers();
+    send_recieve_remaining_insert_buffers();
 
     double mid = wtime();
     if (rank == 0) {
