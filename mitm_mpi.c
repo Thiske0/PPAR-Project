@@ -14,7 +14,7 @@
 
 
 #define BUFFER_SIZE 8192  /* buffer size for each process before sending data over the network */
-#define BSEND_AMOUNT 40   /* number of buffers that can be sent without waiting for completion */
+#define BSEND_AMOUNT 4000   /* number of buffers that can be sent without waiting for completion */
 
 #ifdef __AVX512F__ 
 #define VECTOR_SIZE 32
@@ -324,15 +324,16 @@ void buffer_add(int target, struct buffer_entry entry) {
     while (__atomic_load_n(&writers[target], __ATOMIC_ACQUIRE) > 1) {
         // busy wait
     }
+
     // send the buffer
+    MPI_Bsend(buffers[target], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, target, FULL_BUFFER_TAG, MPI_COMM_WORLD);
 
 #pragma omp critical
     {
         // swap buffer_indices[target]
         swap(target, rank);
-        __atomic_store_n(&buffer_indices[target], 0, __ATOMIC_RELEASE);
-        MPI_Bsend(buffers[rank], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, target, FULL_BUFFER_TAG, MPI_COMM_WORLD);
     }
+    __atomic_store_n(&buffer_indices[target], 0, __ATOMIC_RELEASE);
     __atomic_fetch_sub(&writers[target], 1, __ATOMIC_RELEASE);
 }
 
@@ -356,14 +357,7 @@ void buffer_insert(u64 hash, u64 key, u64 value) {
     buffer_add(target, entry);
 }
 
-int recieving = 0;
 void try_recieve_buffers() {
-    int idx = __atomic_fetch_add(&recieving, 1, __ATOMIC_ACQUIRE);
-    if (idx > 0) {
-        __atomic_fetch_sub(&recieving, 1, __ATOMIC_RELEASE);
-        return;
-    }
-
     int flag;
     MPI_Status status;
     MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
@@ -378,7 +372,6 @@ void try_recieve_buffers() {
 
         MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
     }
-    __atomic_fetch_sub(&recieving, 1, __ATOMIC_RELEASE);
 }
 
 void send_recieve_remaining_buffers() {
@@ -663,9 +656,16 @@ void process_command_line_options(int argc, char** argv) {
 /******************************************************************************/
 
 int main(int argc, char** argv) {
-    MPI_Init(&argc, &argv);
+    int provided;
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if (provided < MPI_THREAD_MULTIPLE) {
+        if (rank == 0) {
+            fprintf(stderr, "Error: MPI does not provide needed threading level\n");
+        }
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
 
     process_command_line_options(argc, argv);
     if (rank == 0) {
