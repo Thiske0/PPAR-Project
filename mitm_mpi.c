@@ -440,7 +440,7 @@ void buffer_add(int target, struct buffer_entry entry) {
     if (index >= BUFFER_SIZE) {
         __atomic_fetch_sub(&writers[target], 1, __ATOMIC_RELEASE);
         // wait for the send to complete
-        while (__atomic_load_n(&buffer_indices[target], __ATOMIC_ACQUIRE) > BUFFER_SIZE) {
+        while (__atomic_load_n(&buffer_indices[target], __ATOMIC_ACQUIRE) >= BUFFER_SIZE) {
             // busy wait
         }
         // try again
@@ -515,7 +515,7 @@ void try_receive_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* nca
     }
 }
 
-void send_recieve_remaining_insert_buffers() {
+void send_receive_remaining_insert_buffers() {
     MPI_Request requests[world_size];
     for (u32 i = 0;i < world_size;i++) {
         if (i == rank) continue;
@@ -535,8 +535,8 @@ void send_recieve_remaining_insert_buffers() {
                 ((u64)buffers[rank][j].value.k), buffers[rank][j].value.v);
         }
     }
-    //only try to revieve once we know that all sends are posted
-    //we know that all are posted becuase we recieved the partial buffers
+    //only try to receive once we know that all sends are posted
+    //we know that all are posted because we received the partial buffers
     try_receive_insert_buffers();
     for (u32 i = 0;i < world_size;i++) {
         if (i == rank) continue;
@@ -544,7 +544,7 @@ void send_recieve_remaining_insert_buffers() {
     }
 }
 
-void send_recieve_remaining_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
+void send_receive_remaining_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
     MPI_Request requests[world_size];
     for (u32 i = 0;i < world_size;i++) {
         if (i == rank) continue;
@@ -566,8 +566,8 @@ void send_recieve_remaining_probe_buffers(int maxres, u64* k1, u64* k2, int* nre
             verify_good_pairs(buffers[rank][j].value.v, x, nx, maxres, k1, k2, nres, ncandidates);
         }
     }
-    //only try to revieve once we know that all sends are posted
-    //we know that all are posted becuase we recieved the partial buffers
+    //only try to receive once we know that all sends are posted
+    //we know that all are posted because we received the partial buffers
     try_receive_probe_buffers(maxres, k1, k2, nres, ncandidates);
     for (u32 i = 0;i < world_size;i++) {
         if (i == rank) continue;
@@ -600,7 +600,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
         try_receive_insert_buffers();
     }
 
-    send_recieve_remaining_insert_buffers();
+    send_receive_remaining_insert_buffers();
     MPI_Barrier(MPI_COMM_WORLD);
     reset_buffers();
 
@@ -629,7 +629,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
         }
         try_receive_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
     }
-    send_recieve_remaining_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
+    send_receive_remaining_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
     if (rank == 0) {
         MPI_Reduce(MPI_IN_PLACE, &ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
         printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
