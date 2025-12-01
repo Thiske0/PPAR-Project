@@ -479,7 +479,7 @@ void buffer_insert(u64 hash, u64 key, u64 value) {
     buffer_add(target, entry);
 }
 
-void try_recieve_insert_buffers() {
+void try_receive_insert_buffers() {
     int flag;
     MPI_Status status;
     MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
@@ -496,7 +496,7 @@ void try_recieve_insert_buffers() {
     }
 }
 
-void try_recieve_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
+void try_receive_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
     int flag;
     MPI_Status status;
     MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
@@ -537,7 +537,7 @@ void send_recieve_remaining_insert_buffers() {
     }
     //only try to revieve once we know that all sends are posted
     //we know that all are posted becuase we recieved the partial buffers
-    try_recieve_insert_buffers();
+    try_receive_insert_buffers();
     for (u32 i = 0;i < world_size;i++) {
         if (i == rank) continue;
         MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
@@ -568,7 +568,7 @@ void send_recieve_remaining_probe_buffers(int maxres, u64* k1, u64* k2, int* nre
     }
     //only try to revieve once we know that all sends are posted
     //we know that all are posted becuase we recieved the partial buffers
-    try_recieve_probe_buffers(maxres, k1, k2, nres, ncandidates);
+    try_receive_probe_buffers(maxres, k1, k2, nres, ncandidates);
     for (u32 i = 0;i < world_size;i++) {
         if (i == rank) continue;
         MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
@@ -597,7 +597,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
                 buffer_insert(hash[j], y, z);
             }
         }
-        try_recieve_insert_buffers();
+        try_receive_insert_buffers();
     }
 
     send_recieve_remaining_insert_buffers();
@@ -627,7 +627,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
                 verify_good_pairs(z, x, nx, maxres, k1, k2, &nres, &ncandidates);
             }
         }
-        try_recieve_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
+        try_receive_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
     }
     send_recieve_remaining_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
     if (rank == 0) {
