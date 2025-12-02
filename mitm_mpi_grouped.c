@@ -747,7 +747,7 @@ void process_command_line_options(int argc, char** argv) {
     }
     if (online && rank == 0) {
         /* fetch problem from server */
-        srand(time(NULL));
+        srand(wtime() * 1e6);
         rand();
         int version = rand() % 1000;
         char url[256];
