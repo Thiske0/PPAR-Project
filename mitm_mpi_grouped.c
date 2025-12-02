@@ -1,5 +1,5 @@
-// mpicc -O3 -march=native -Wall -o mitm_mpi mitm_mpi.c -fopenmp
-// mpiexec -n 1 ./mitm_mpi --n 27 --online
+// mpicc -O3 -march=native -Wall -o mitm_mpi_grouped mitm_mpi_grouped.c -fopenmp
+// mpiexec -n 1 ./mitm_mpi_grouped --n 27 --online
 
 #include <inttypes.h>
 #include <stdbool.h>
