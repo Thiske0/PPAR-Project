@@ -12,11 +12,10 @@
 #include <omp.h>
 #include <mpi.h>
 
+#include "groups.h"
 
 #define BUFFER_SIZE 8192  /* buffer size for each process before sending data over the network */
 #define BSEND_AMOUNT 1000   /* number of buffers that can be sent without waiting for completion */
-#define GROUPS_COUNT_FILL 2  /* number of MPI groups in fill part */
-#define GROUPS_COUNT_PROBE 2  /* number of MPI groups in probe part */
 
 #ifdef __AVX512F__ 
 #define VECTOR_SIZE 32
@@ -817,6 +816,7 @@ int main(int argc, char** argv) {
         printf("Running with n=%d, C0=(%08x, %08x) and C1=(%08x, %08x)\n",
             (int)n, C[0][0], C[0][1], C[1][0], C[1][1]);
         printf("Using %d processes, %d threads and vector size %d\n", world_size, num_threads, VECTOR_SIZE);
+        printf("Using %d groups for fill, %d groups for probe\n", GROUPS_COUNT_FILL, GROUPS_COUNT_PROBE);
     }
 
     dict_setup(1.125 * (1ull << n) / world_size);
