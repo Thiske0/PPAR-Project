@@ -49,7 +49,7 @@ u32 C[2][2];
 
 /************************ tools and utility functions *************************/
 
-int world_size, rank;
+int world_size, rank, num_threads;
 
 double wtime() {
     struct timeval ts;
@@ -366,6 +366,7 @@ struct buffer_entry {
 };
 
 struct buffer_entry** buffers;
+struct buffer_entry** receive_buffers;
 MPI_Request* requests;
 struct buffer_entry** outgoing_request_buffers;
 u32* buffer_indices;
@@ -388,6 +389,11 @@ void init_buffers() {
     buffers = malloc(world_size * sizeof(*buffers));
     for (int i = 0; i < world_size; i++) {
         buffers[i] = malloc(BUFFER_SIZE * sizeof(**buffers));
+    }
+
+    receive_buffers = malloc(num_threads * sizeof(*buffers));
+    for (int i = 0; i < num_threads; i++) {
+        receive_buffers[i] = malloc(BUFFER_SIZE * sizeof(**buffers));
     }
 
     requests = malloc(BSEND_AMOUNT * sizeof(*requests));
@@ -482,14 +488,16 @@ void buffer_insert(u64 hash, u64 key, u64 value) {
 void try_receive_insert_buffers() {
     int flag;
     MPI_Status status;
+
+    int thread_id = omp_get_thread_num();
     MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
     while (flag) {
-        MPI_Recv(buffers[rank], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, status.MPI_SOURCE, status.MPI_TAG,
+        MPI_Recv(receive_buffers[thread_id], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, status.MPI_SOURCE, status.MPI_TAG,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         // insert entries
         for (u32 i = 0; i < BUFFER_SIZE; i++) {
-            dict_insert_hash(buffers[rank][i].key,
-                ((u64)buffers[rank][i].value.k), buffers[rank][i].value.v);
+            dict_insert_hash(receive_buffers[thread_id][i].key,
+                ((u64)receive_buffers[thread_id][i].value.k), receive_buffers[thread_id][i].value.v);
         }
 
         MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
@@ -499,16 +507,18 @@ void try_receive_insert_buffers() {
 void try_receive_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
     int flag;
     MPI_Status status;
+
+    int thread_id = omp_get_thread_num();
     MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
     while (flag) {
-        MPI_Recv(buffers[rank], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, status.MPI_SOURCE, status.MPI_TAG,
+        MPI_Recv(receive_buffers[thread_id], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, status.MPI_SOURCE, status.MPI_TAG,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         // insert entries
         for (u32 i = 0; i < BUFFER_SIZE; i++) {
             u64 x[256];
-            int nx = dict_probe_hash(buffers[rank][i].key,
-                ((u64)buffers[rank][i].value.k), 256, x);
-            verify_good_pairs(buffers[rank][i].value.v, x, nx, maxres, k1, k2, nres, ncandidates);
+            int nx = dict_probe_hash(receive_buffers[thread_id][i].key,
+                ((u64)receive_buffers[thread_id][i].value.k), 256, x);
+            verify_good_pairs(receive_buffers[thread_id][i].value.v, x, nx, maxres, k1, k2, nres, ncandidates);
         }
 
         MPI_Iprobe(MPI_ANY_SOURCE, FULL_BUFFER_TAG, MPI_COMM_WORLD, &flag, &status);
@@ -714,7 +724,8 @@ void process_command_line_options(int argc, char** argv) {
         /* fetch problem from server */
         srand(time(NULL));
         rand();
-        int version = rand() % 1000;
+        //int version = rand() % 1000;
+        int version = 349;
         char url[256];
         sprintf(url, "https://ppar.tme-crypto.fr/mathis.poppe.%d/%llu", version, (unsigned long long)n);
         printf("Fetching problem from %s\n", url);
@@ -767,10 +778,10 @@ int main(int argc, char** argv) {
     }
 
     process_command_line_options(argc, argv);
+    num_threads = omp_get_max_threads();
     if (rank == 0) {
         printf("Running with n=%d, C0=(%08x, %08x) and C1=(%08x, %08x)\n",
             (int)n, C[0][0], C[0][1], C[1][0], C[1][1]);
-        int num_threads = omp_get_max_threads();
         printf("Using %d processes, %d threads and vector size %d\n", world_size, num_threads, VECTOR_SIZE);
     }
 
