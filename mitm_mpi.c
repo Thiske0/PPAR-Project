@@ -25,7 +25,11 @@
 #ifdef __AVX__
 #define VECTOR_SIZE 8
 #else
+#ifdef __ARM_NEON
+#define VECTOR_SIZE 4
+#else
 #define VECTOR_SIZE 1
+#endif
 #endif
 #endif
 #endif
@@ -724,8 +728,7 @@ void process_command_line_options(int argc, char** argv) {
         /* fetch problem from server */
         srand(time(NULL));
         rand();
-        //int version = rand() % 1000;
-        int version = 349;
+        int version = rand() % 1000;
         char url[256];
         sprintf(url, "https://ppar.tme-crypto.fr/mathis.poppe.%d/%llu", version, (unsigned long long)n);
         printf("Fetching problem from %s\n", url);
