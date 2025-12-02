@@ -12,10 +12,7 @@
 #include <omp.h>
 #include <mpi.h>
 
-#include "groups.h"
-
-#define BUFFER_SIZE 8192  /* buffer size for each process before sending data over the network */
-#define BSEND_AMOUNT 1000   /* number of buffers that can be sent without waiting for completion */
+#include "constants.h"
 
 #ifdef __AVX512F__ 
 #define VECTOR_SIZE 32
