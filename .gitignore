@@ -3,6 +3,8 @@
 *.err
 /.vscode
 
+constants.h
+
 mitm_mpi_grouped
 mitm_mpi
 mitm_omp
