@@ -302,6 +302,8 @@ void dict_setup(u64 size) {
         fprintf(stderr, "impossible to allocate the dictionnary");
         exit(1);
     }
+
+#pragma omp parallel for schedule(dynamic, 8192)
     for (u64 i = 0; i < dict_size; i++)
         A[i].k = EMPTY;
 }
@@ -629,7 +631,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
 
     double mid = wtime();
     if (rank == 0) {
-        printf("Fill: %.1fs\n", mid - start);
+        printf("Fill: %.3fs\n", mid - start);
     }
 
     const int group_probe = rank % GROUPS_COUNT_PROBE; /* the group that this process belongs to */
@@ -667,7 +669,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
     send_receive_remaining_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
     if (rank == 0) {
         MPI_Reduce(MPI_IN_PLACE, &ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
-        printf("Probe: %.1fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
+        printf("Probe: %.3fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
         int nres_per_process[world_size];
         MPI_Gather(&nres, 1, MPI_INT, nres_per_process, 1, MPI_INT, 0, MPI_COMM_WORLD);
         int offsets[world_size];

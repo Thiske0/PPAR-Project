@@ -198,6 +198,8 @@ void dict_setup(u64 size) {
         fprintf(stderr, "impossible to allocate the dictionnary");
         exit(1);
     }
+    
+#pragma omp parallel for schedule(dynamic, 8192)
     for (u64 i = 0; i < dict_size; i++)
         A[i].k = EMPTY;
 }
