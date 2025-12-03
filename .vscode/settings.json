@@ -6,6 +6,7 @@
         "inttypes.h": "c",
         "stdbool.h": "c",
         "stdlib.h": "c",
-        "omp.h": "c"
+        "omp.h": "c",
+        "stdio.h": "c"
     }
 }
