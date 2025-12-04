@@ -28,6 +28,7 @@ for fill in "${GROUPS_COUNT_FILL[@]}"; do
                 mpicc -O3 -march=native -Wall -o mitm_mpi_grouped mitm_mpi_grouped.c -fopenmp
 
                 mpiexec \
+                    --mca plm_rsh_agent oarsh \
                     --mca pml ob1 \
                     --mca btl ^openib \
                     --bind-to none \
