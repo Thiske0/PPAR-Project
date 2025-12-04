@@ -5,7 +5,7 @@
 #OAR -E results/mitm_OAR_%jobid%.err
 #OAR -p paradoxe
 
-N=30
+N=20
 
 
 GROUPS_COUNT_FILL=8

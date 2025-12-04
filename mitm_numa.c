@@ -376,6 +376,92 @@ int dict_probe(struct entry* dict, u64 key, int maxval, u64 values[], u64 dict_s
     return dict_probe_hash(dict, h, key, maxval, values, dict_size);
 }
 
+/******************************** queue ********************************/
+
+struct queue_entry {
+    u64 key; // 32-bit key (modulo dict_size)
+    struct entry value; // value to insert at this key
+    u32 seq; // whether the entry is ready to be consumed
+};
+
+struct queue_entry*** queues;
+u32** queue_heads;
+u32** queue_tails;
+
+void queue_setup(int node, int local_thread_id) {
+    if(local_thread_id == 0 && node == 0) {
+        queues = numa_alloc_local(sizeof(*queues) * numa_nodes);
+        queue_heads = numa_alloc_local(sizeof(*queue_heads) * numa_nodes);
+        queue_tails = numa_alloc_local(sizeof(*queue_tails) * numa_nodes);
+    }
+    #pragma omp barrier
+    if(local_thread_id == 0) {
+        queues[node] = numa_alloc_local(sizeof(**queues) * numa_nodes);
+        queue_heads[node] = numa_alloc_local(sizeof(**queue_heads) * numa_nodes);
+        queue_tails[node] = numa_alloc_local(sizeof(**queue_tails) * numa_nodes);
+        for (int n = 0; n < numa_nodes; n++) {
+            if(n == node)
+                continue;
+            queues[node][n] = numa_alloc_local(sizeof(***queues) * BUFFER_SIZE);
+            queue_heads[node][n] = 0;
+            queue_tails[node][n] = 0;
+        }
+    }
+    #pragma omp barrier
+}
+
+int queue_remove(int node, u64* key, struct entry* value, int from_node) {
+    u32 tail = __atomic_load_n(&queue_tails[node][from_node], __ATOMIC_ACQUIRE);
+    while(true) {
+        u32 head = __atomic_load_n(&queue_heads[node][from_node], __ATOMIC_ACQUIRE);
+        if (head == tail) {
+            return 0; // empty
+        }
+        while (__atomic_load_n(&queues[node][from_node][head].seq, __ATOMIC_ACQUIRE) == 1) {
+            // busy wait
+        }
+        struct queue_entry entry = queues[node][from_node][head];
+
+        u32 new_head = (head + 1) % BUFFER_SIZE;
+        if (__atomic_compare_exchange_n(&queue_heads[node][from_node], &head, new_head, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            __atomic_store_n(&queues[node][from_node][head].seq, 0, __ATOMIC_RELEASE);
+            *key = entry.key;
+            *value = entry.value;
+            return 1;
+        }
+    }
+}
+
+void queue_add(int node, u64 key, struct entry value, int to_node, struct entry* dict, u64 dict_size) {
+    struct queue_entry entry = { .key = key, .value = value, .seq = 1 };
+    while(true) {
+        u32 head = __atomic_load_n(&queue_heads[to_node][node], __ATOMIC_ACQUIRE);
+        u32 tail = __atomic_load_n(&queue_tails[to_node][node], __ATOMIC_ACQUIRE);
+        u32 new_tail = (tail + 1) % BUFFER_SIZE;
+        if (new_tail == head) {
+            // full
+            // try to remove from mirror queue to prevent deadlock
+            u64 to_add_key;
+            struct entry to_add_value;
+            for(int n = 0; n < numa_nodes; n++) {
+                if(n == node)
+                    continue;
+                while(queue_remove(node, &to_add_key, &to_add_value, n)) {
+                    dict_insert_hash(dict, to_add_key, to_add_value.k, to_add_value.v, dict_size);
+                }
+            }
+            continue;
+        }
+        u32 expected = 0;
+        __atomic_compare_exchange_n(&queues[to_node][node][tail].seq, &expected, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+        if (__atomic_compare_exchange_n(&queue_tails[to_node][node], &tail, new_tail, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            queues[to_node][node][tail] = entry;
+            __atomic_store_n(&queues[to_node][node][tail].seq, 2, __ATOMIC_RELEASE);
+            return;
+        }
+    }
+}
+
 /******************************************************************************/
 
 /* search the "golden collision" */
@@ -385,27 +471,54 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_threa
     assert(N % BUFFER_SIZE == 0);
     assert(BUFFER_SIZE % VECTOR_SIZE == 0);
     int nres = 0;
+    u64 reset_freq = VECTOR_SIZE; //BUFFER_SIZE / num_threads;
     
-    for (u64 xo = local_thread_id * BUFFER_SIZE; xo < N; xo += BUFFER_SIZE * num_threads) {
-        for(u64 x = xo; x <  xo + BUFFER_SIZE; x += VECTOR_SIZE) {
+    for (u64 xo = (local_thread_id + node * num_threads) * reset_freq; xo < N; xo += reset_freq * num_threads * numa_nodes) {
+        for(u64 x = xo; x <  xo + reset_freq; x += VECTOR_SIZE) {
             u64 vector[VECTOR_SIZE];
             f_vectorized(x, vector);
             u64 hash[VECTOR_SIZE];
             murmur64_vectorized(vector, hash, dict_size);
             for (int j = 0; j < VECTOR_SIZE; j++) {
-                u64 z = x + j;
                 u64 f_value = vector[j];
                 int target_rank = hash[j] % world_size;
                 int target_node = (hash[j] / world_size) % numa_nodes;
                 // throw away values that do not belong to this process
-                if (target_rank == rank && target_node == node) {
-                    dict_insert_hash(dict, hash[j] / (world_size * numa_nodes), f_value, z, dict_size);
+                if (target_rank == rank) {
+                    if (target_node == node) {
+                        // insert directly
+                        dict_insert_hash(dict, hash[j] / (world_size * numa_nodes), hash[j], f_value, dict_size);
+                    } else {
+                        // enqueue for remote insertion
+                        struct entry entry = { .k = (u32)(hash[j] % PRIME), .v = f_value };
+                        //queue_add(node, hash[j] / (world_size * numa_nodes), entry, target_node, dict, dict_size);
+                    }
                 }
+            }
+        }
+        for(int n = 0; n < numa_nodes; n++) {
+            if(n == node)
+                continue;
+            u64 key;
+            struct entry value;
+            while(queue_remove(node, &key, &value, n)) {
+                dict_insert_hash(dict, key, value.k, value.v, dict_size);
             }
         }
     }
 
     #pragma omp barrier
+    for(int n = 0; n < numa_nodes; n++) {
+        if(n == node)
+            continue;
+        u64 key;
+        struct entry value;
+        while(queue_remove(node, &key, &value, n)) {
+            dict_insert_hash(dict, key, value.k, value.v, dict_size);
+        }
+    }
+    #pragma omp barrier
+    
     double mid = wtime();
     if (rank == 0 && node == 0 && local_thread_id == 0) {
         printf("Fill: %.3fs\n", mid - start);
@@ -590,6 +703,8 @@ int main(int argc, char** argv) {
         // setup dictionary
         u64 dict_size = 1.125 * (1ull << n) / (world_size * numa_nodes);
         struct entry* dict = dict_setup(dict_size, node, local_thread_id);
+        // setup queues
+        queue_setup(node, local_thread_id);
 
         /* search */
         u64 k1[16], k2[16];
