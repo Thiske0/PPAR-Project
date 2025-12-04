@@ -1,4 +1,4 @@
-// mpicc -O3 -march=native -Wall -o mitm_numa mitm_numa.c -fopenmp
+// mpicc -O3 -march=native -Wall -o mitm_numa mitm_numa.c -fopenmp -lnuma
 // mpiexec -n 1 ./mitm_numa --n 27 --online
 
 #include <inttypes.h>
@@ -12,6 +12,7 @@
 #include <omp.h>
 #include <mpi.h>
 #include <time.h>
+#include <numa.h>
 
 #include "constants.h"
 
@@ -43,16 +44,13 @@ struct __attribute__((packed)) entry { u32 k; u64 v; };  /* hash table entry */
 u64 n = 0;         /* block size (in bits) */
 u64 mask;          /* this is 2**n - 1 */
 
-u64 dict_size;     /* number of slots in the hash table */
-struct entry* A;   /* the hash table */
-
 /* (P, C) : two plaintext-ciphertext pairs */
 u32 P[2][2] = { {0, 0}, {0xffffffff, 0xffffffff} };
 u32 C[2][2];
 
 /************************ tools and utility functions *************************/
 
-int world_size, rank, num_threads;
+int world_size, rank, num_threads, numa_nodes;
 
 double wtime() {
     struct timeval ts;
@@ -70,7 +68,7 @@ u64 murmur64(u64 x) {
     return x;
 }
 
-void murmur64_vectorized(u64* restrict  x, u64* restrict  result) {
+void murmur64_vectorized(u64* restrict  x, u64* restrict  result, u64 dict_size) {
     for (int i = 0; i < VECTOR_SIZE; i++) {
         u64 val = x[i];
         val ^= val >> 33;
@@ -78,7 +76,7 @@ void murmur64_vectorized(u64* restrict  x, u64* restrict  result) {
         val ^= val >> 33;
         val *= 0xc4ceb9fe1a85ec53ull;
         val ^= val >> 33;
-        val %= (dict_size * world_size);
+        val %= (dict_size * world_size * numa_nodes);
         result[i] = val;
     }
 }
@@ -261,8 +259,7 @@ bool is_good_pair(u64 k1, u64 k2) {
     return (Ct[0] == C[1][0]) && (Ct[1] == C[1][1]);
 }
 
-void verify_good_pairs(u64 z, u64* x, int nx, int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
-    *ncandidates += nx;
+void verify_good_pairs(u64 z, u64* x, int nx, int maxres, u64* k1, u64* k2, int* nres) {
     for (int i = 0; i < nx; i++) {
         if (is_good_pair(x[i], z)) {
 #pragma omp critical
@@ -286,45 +283,64 @@ void verify_good_pairs(u64 z, u64* x, int nx, int maxres, u64* k1, u64* k2, int*
  * The keys are only stored modulo 2**32 - 5 (a prime number), and this can lead
  * to some false positives.
  */
-static const u32 EMPTY = 0xffffffff;
-static const u64 PRIME = 0xfffffffb;
+#define EMPTY 0xffffffff
+#define PRIME 0xfffffffb
+
 
 /* allocate a hash table with `size` slots (12*size bytes) */
-void dict_setup(u64 size) {
-    dict_size = size;
-    if (rank == 0) {
+struct entry* dict_setup(u64 size, int node, int local_thread_id) {
+    static struct entry** dicts = NULL;
+
+    if(node == 0 && local_thread_id == 0) {
+        dicts = numa_alloc_local(sizeof(*dicts) * numa_nodes);
+    }
+
+    if (rank == 0 && node == 0 && local_thread_id == 0) {
         char hdsize[8];
-        human_format(dict_size * sizeof(*A), hdsize);
-        printf("Dictionary size: %sB\n", hdsize);
+        human_format(size * sizeof(**dicts), hdsize);
+        printf("Dictionary size: %d x %sB\n", numa_nodes, hdsize);
     }
 
-    A = malloc(sizeof(*A) * dict_size);
-    if (A == NULL) {
-        fprintf(stderr, "impossible to allocate the dictionnary");
-        exit(1);
+    #pragma omp barrier
+    if(local_thread_id == 0) {
+        dicts[node] = numa_alloc_local(sizeof(**dicts) * size);
     }
 
-#pragma omp parallel for schedule(dynamic, 8192)
-    for (u64 i = 0; i < dict_size; i++)
-        A[i].k = EMPTY;
+    
+    #pragma omp barrier
+    if (dicts[node] == NULL) {
+        fprintf(stderr, "impossible to allocate the dictionnary\n");
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    #pragma omp barrier
+    struct entry* dict = dicts[node];
+    for(u64 i = BUFFER_SIZE *  local_thread_id; i < size; i+= num_threads * BUFFER_SIZE) {
+        for(u64 j = i; j < i + BUFFER_SIZE && j < size; j++) {
+            dict[j].k = EMPTY;
+        }
+    }
+
+    #pragma omp barrier
+    return dict;
 }
 
 /* Insert the binding key |----> value in the dictionnary */
-void dict_insert_hash(u64 hash, u64 key, u64 value) {
+void dict_insert_hash(struct entry* dict, u64 hash, u64 key, u64 value, u64 dict_size) {
     u32 expected = EMPTY;
-    while (!__atomic_compare_exchange_n(&A[hash].k, &expected, key % PRIME, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    while (!__atomic_compare_exchange_n(&dict[hash].k, &expected, key % PRIME, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
         expected = EMPTY;
         hash += 1;
         if (hash == dict_size)
             hash = 0;
     }
-    A[hash].v = value;
+    dict[hash].v = value;
 }
 
 /* Insert the binding key |----> value in the dictionnary */
-void dict_insert(u64 key, u64 value) {
+void dict_insert(struct entry* dict, u64 key, u64 value, u64 dict_size) {
     u32 h = murmur64(key) % dict_size;
-    dict_insert_hash(h, key, value);
+    dict_insert_hash(dict, h, key, value, dict_size);
 }
 
 /* Query the dictionnary with this `key`.  Write values (potentially)
@@ -332,16 +348,16 @@ void dict_insert(u64 key, u64 value) {
  *  array must be preallocated of size (at least) `maxval`.
  *  The function returns -1 if there are more than `maxval` results.
  */
-int dict_probe_hash(u64 hash, u64 key, int maxval, u64 values[]) {
+int dict_probe_hash(struct entry* dict, u64 hash, u64 key, int maxval, u64 values[], u64 dict_size) {
     u32 k = key % PRIME;
     int nval = 0;
     for (;;) {
-        if (A[hash].k == EMPTY)
+        if (dict[hash].k == EMPTY)
             return nval;
-        if (A[hash].k == k) {
+        if (dict[hash].k == k) {
             if (nval == maxval)
                 return -1;
-            values[nval] = A[hash].v;
+            values[nval] = dict[hash].v;
             nval += 1;
         }
         hash += 1;
@@ -355,82 +371,73 @@ int dict_probe_hash(u64 hash, u64 key, int maxval, u64 values[]) {
  *  array must be preallocated of size (at least) `maxval`.
  *  The function returns -1 if there are more than `maxval` results.
  */
-int dict_probe(u64 key, int maxval, u64 values[]) {
+int dict_probe(struct entry* dict, u64 key, int maxval, u64 values[], u64 dict_size) {
     u64 h = murmur64(key) % dict_size;
-    return dict_probe_hash(h, key, maxval, values);
+    return dict_probe_hash(dict, h, key, maxval, values, dict_size);
 }
 
 /******************************************************************************/
 
 /* search the "golden collision" */
-int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
+int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_thread_id, struct entry* dict, u64 dict_size) {
     double start = wtime();
     u64 N = 1ull << n;
     assert(N % BUFFER_SIZE == 0);
     assert(BUFFER_SIZE % VECTOR_SIZE == 0);
-
-#pragma omp parallel for schedule(dynamic, BUFFER_SIZE)
-    for (u64 x = 0; x < N; x += VECTOR_SIZE) {
-        u64 vector[VECTOR_SIZE];
-        f_vectorized(x, vector);
-        u64 hash[VECTOR_SIZE];
-        murmur64_vectorized(vector, hash);
-        for (int j = 0; j < VECTOR_SIZE; j++) {
-            u64 z = x + j;
-            u64 f_value = vector[j];
-            int target = hash[j] % world_size;
-            // throw away values that do not belong to this process
-            if (target == rank) {
-                dict_insert_hash(hash[j] / world_size, f_value, z);
+    int nres = 0;
+    
+    for (u64 xo = local_thread_id * BUFFER_SIZE; xo < N; xo += BUFFER_SIZE * num_threads) {
+        for(u64 x = xo; x <  xo + BUFFER_SIZE; x += VECTOR_SIZE) {
+            u64 vector[VECTOR_SIZE];
+            f_vectorized(x, vector);
+            u64 hash[VECTOR_SIZE];
+            murmur64_vectorized(vector, hash, dict_size);
+            for (int j = 0; j < VECTOR_SIZE; j++) {
+                u64 z = x + j;
+                u64 f_value = vector[j];
+                int target_rank = hash[j] % world_size;
+                int target_node = (hash[j] / world_size) % numa_nodes;
+                // throw away values that do not belong to this process
+                if (target_rank == rank && target_node == node) {
+                    dict_insert_hash(dict, hash[j] / (world_size * numa_nodes), f_value, z, dict_size);
+                }
             }
         }
     }
 
+    #pragma omp barrier
     double mid = wtime();
-    if (rank == 0) {
+    if (rank == 0 && node == 0 && local_thread_id == 0) {
         printf("Fill: %.3fs\n", mid - start);
     }
 
-    int nres = 0;
-    u64 ncandidates = 0;
-#pragma omp parallel for schedule(dynamic, BUFFER_SIZE) reduction(+:ncandidates)
-    for (u64 y = 0; y < N; y += VECTOR_SIZE) {
-        u64 x[256];
-        u64 vector[VECTOR_SIZE];
-        g_vectorized(y, vector);
-        u64 hash[VECTOR_SIZE];
-        murmur64_vectorized(vector, hash);
-        for (int j = 0; j < VECTOR_SIZE; j++) {
-            u64 z = y + j;
-            u64 y = vector[j];
-            // throw away values that do not belong to this process
-            if (hash[j] % world_size == rank) {
-                int nx = dict_probe_hash(hash[j] / world_size, y, 256, x);
-                assert(nx >= 0);
-                verify_good_pairs(z, x, nx, maxres, k1, k2, &nres, &ncandidates);
+    for (u64 yo = local_thread_id * BUFFER_SIZE; yo < N; yo += BUFFER_SIZE * num_threads) {
+        for (u64 y = yo; y < yo + BUFFER_SIZE; y += VECTOR_SIZE) {
+            u64 x[256];
+            u64 vector[VECTOR_SIZE];
+            g_vectorized(y, vector);
+            u64 hash[VECTOR_SIZE];
+            murmur64_vectorized(vector, hash, dict_size);
+            for (int j = 0; j < VECTOR_SIZE; j++) {
+                u64 z = y + j;
+                u64 y = vector[j];
+                int target_rank = hash[j] % world_size;
+                int target_node = (hash[j] / world_size) % numa_nodes;
+                // throw away values that do not belong to this process
+                if (target_rank == rank && target_node == node) {
+                    int nx = dict_probe_hash(dict, hash[j] / (world_size * numa_nodes), y, 256, x, dict_size);
+                    assert(nx >= 0);
+                    verify_good_pairs(z, x, nx, maxres, k1, k2, &nres);
+                }
             }
         }
     }
-    
-    if (rank == 0) {
-        MPI_Reduce(MPI_IN_PLACE, &ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
-        printf("Probe: %.3fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
-        int nres_per_process[world_size];
-        MPI_Gather(&nres, 1, MPI_INT, nres_per_process, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        int offsets[world_size];
-        offsets[0] = 0;
-        for (int i = 1; i < world_size; i++) {
-            offsets[i] = offsets[i - 1] + nres_per_process[i - 1];
-        }
-        MPI_Gatherv(MPI_IN_PLACE, nres, MPI_UINT64_T, k1, nres_per_process, offsets, MPI_UINT64_T, 0, MPI_COMM_WORLD);
-        MPI_Gatherv(MPI_IN_PLACE, nres, MPI_UINT64_T, k2, nres_per_process, offsets, MPI_UINT64_T, 0, MPI_COMM_WORLD);
-        nres = offsets[world_size - 1] + nres_per_process[world_size - 1];
-    } else {
-        MPI_Reduce(&ncandidates, NULL, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
-        MPI_Gather(&nres, 1, MPI_INT, NULL, 0, MPI_INT, 0, MPI_COMM_WORLD);
-        MPI_Gatherv(k1, nres, MPI_UINT64_T, NULL, NULL, NULL, MPI_UINT64_T, 0, MPI_COMM_WORLD);
-        MPI_Gatherv(k2, nres, MPI_UINT64_T, NULL, NULL, NULL, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+
+    #pragma omp barrier
+    if (rank == 0 && node == 0 && local_thread_id == 0) {
+        printf("Probe: %.3fs\n", wtime() - mid);
     }
+
     if (nres > maxres)
         return -1;
     return nres;
@@ -536,6 +543,9 @@ void process_command_line_options(int argc, char** argv) {
 
 /******************************************************************************/
 
+u64 k1_global[16], k2_global[16];
+int nres_global = 0;
+
 int main(int argc, char** argv) {
     int provided;
     MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
@@ -548,27 +558,73 @@ int main(int argc, char** argv) {
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
+    numa_nodes = numa_num_configured_nodes();
+    if (numa_nodes <= 1) {
+        if (rank == 0) {
+            fprintf(stderr, "Error: NUMA nodes not detected\n");
+        }
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    numa_set_localalloc();
+
     process_command_line_options(argc, argv);
-    num_threads = omp_get_max_threads();
+    num_threads = omp_get_max_threads() / numa_nodes;
+
     if (rank == 0) {
         printf("Running with n=%d, C0=(%08x, %08x) and C1=(%08x, %08x)\n",
             (int)n, C[0][0], C[0][1], C[1][0], C[1][1]);
-        printf("Using %d processes, %d threads and vector size %d\n", world_size, num_threads, VECTOR_SIZE);
+        printf("Using %d processes, %d numa nodes, %d threads and vector size %d\n", world_size, numa_nodes, num_threads, VECTOR_SIZE);
+    }
+    
+    #pragma omp parallel
+    {
+        // seperate threads per NUMA node
+        int id = omp_get_thread_num();
+        int node = id % numa_nodes;
+        int local_thread_id = id / numa_nodes;
+
+        // bind thread to node
+        numa_run_on_node(node);
+        numa_set_localalloc();
+
+        // setup dictionary
+        u64 dict_size = 1.125 * (1ull << n) / (world_size * numa_nodes);
+        struct entry* dict = dict_setup(dict_size, node, local_thread_id);
+
+        /* search */
+        u64 k1[16], k2[16];
+        int nkey = golden_claw_search(16, k1, k2, node, local_thread_id, dict, dict_size);
+        int index = __atomic_fetch_add(&nres_global, nkey, __ATOMIC_RELAXED);
+        for (int i = 0; i < nkey; i++) {
+            k1_global[index + i] = k1[i];
+            k2_global[index + i] = k2[i];
+        }
+    }
+    
+    if (rank == 0) {
+        int nres_per_process[world_size];
+        MPI_Gather(&nres_global, 1, MPI_INT, nres_per_process, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        int offsets[world_size];
+        offsets[0] = 0;
+        for (int i = 1; i < world_size; i++) {
+            offsets[i] = offsets[i - 1] + nres_per_process[i - 1];
+        }
+        MPI_Gatherv(MPI_IN_PLACE, nres_global, MPI_UINT64_T, k1_global, nres_per_process, offsets, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+        MPI_Gatherv(MPI_IN_PLACE, nres_global, MPI_UINT64_T, k2_global, nres_per_process, offsets, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+        nres_global = offsets[world_size - 1] + nres_per_process[world_size - 1];
+    } else {
+        MPI_Gather(&nres_global, 1, MPI_INT, NULL, 0, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Gatherv(k1_global, nres_global, MPI_UINT64_T, NULL, NULL, NULL, MPI_UINT64_T, 0, MPI_COMM_WORLD);
+        MPI_Gatherv(k2_global, nres_global, MPI_UINT64_T, NULL, NULL, NULL, MPI_UINT64_T, 0, MPI_COMM_WORLD);
     }
 
-    dict_setup(1.125 * (1ull << n) / world_size);
-
-    /* search */
-    u64 k1[16], k2[16];
-    int nkey = golden_claw_search(16, k1, k2);
-
     if (rank == 0) {
-        //assert(nkey > 0);
+        assert(nres_global > 0);
         /* validation */
-        for (int i = 0; i < nkey; i++) {
-            assert(f(k1[i]) == g(k2[i]));
-            assert(is_good_pair(k1[i], k2[i]));
-            printf("Solution found: (%" PRIx64 ", %" PRIx64 ") [checked OK]\n", k1[i], k2[i]);
+        for (int i = 0; i < nres_global; i++) {
+            assert(f(k1_global[i]) == g(k2_global[i]));
+            assert(is_good_pair(k1_global[i], k2_global[i]));
+            printf("Solution found: (%" PRIx64 ", %" PRIx64 ") [checked OK]\n", k1_global[i], k2_global[i]);
         }
     }
     MPI_Finalize();
