@@ -18,7 +18,7 @@ gcc -Wall -o make_header make_header.c
 ./make_header --fill-groups $GROUPS_COUNT_FILL --probe-groups $GROUPS_COUNT_PROBE --buffer-size $BUFFER_SIZE --bsend-amount $BSEND_AMOUNT
 
 # We compile and run on the compute nodes because of the -march=native flag
-mpicc -O3 -march=native -Wall -o mitm_mpi_grouped mitm_mpi_grouped.c -fopenmp
+mpicc -O3 -march=native -Wall -o mitm_numa mitm_numa.c -fopenmp
 
 mpiexec \
     --mca plm_rsh_agent oarsh \
@@ -27,4 +27,4 @@ mpiexec \
     --bind-to none \
     --map-by ppr:1:node \
     --hostfile $OAR_NODEFILE \
-    ./mitm_mpi_grouped --n $N --online
+    ./mitm_numa --n $N --online

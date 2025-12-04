@@ -5,6 +5,7 @@
 
 constants.h
 
+mitm_numa
 mitm_mpi_grouped
 mitm_mpi
 mitm_omp
