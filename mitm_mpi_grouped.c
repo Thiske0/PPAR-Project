@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <omp.h>
 #include <mpi.h>
+#include <time.h>
 
 #include "constants.h"
 
@@ -749,7 +750,7 @@ void process_command_line_options(int argc, char** argv) {
     }
     if (online && rank == 0) {
         /* fetch problem from server */
-        srand(wtime() * 1e6);
+        srand(time(NULL));
         rand();
         int version = rand() % 1000;
         char url[256];

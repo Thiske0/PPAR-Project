@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <getopt.h>
 #include <assert.h>
+#include <time.h>
 
 typedef uint64_t u64;       /* portable 64-bit integer */
 typedef uint32_t u32;       /* portable 32-bit integer */
@@ -296,7 +297,7 @@ void process_command_line_options(int argc, char** argv) {
     }
     if (online) {
         /* fetch problem from server */
-        srand(wtime() * 1e6);
+        srand(time(NULL));
         rand();
         int version = rand() % 1000;
         char url[256];
