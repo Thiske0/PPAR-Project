@@ -21,11 +21,11 @@
 #ifdef __AVX2__
 #define VECTOR_SIZE 16
 #else
+#ifdef __ARM_NEON
+#define VECTOR_SIZE 16
+#else
 #ifdef __AVX__
 #define VECTOR_SIZE 8
-#else
-#ifdef __ARM_NEON
-#define VECTOR_SIZE 4
 #else
 #define VECTOR_SIZE 1
 #endif
@@ -532,13 +532,14 @@ void try_receive_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* nca
 
 void send_receive_remaining_insert_buffers() {
     MPI_Request requests[world_size];
+    const int group_rank = rank % GROUPS_COUNT_FILL;
     for (u32 i = 0;i < world_size;i++) {
-        if (i == rank) continue;
+        if ((i % GROUPS_COUNT_FILL) != group_rank || i == rank) continue;
         int count = buffer_indices[i];
         MPI_Isend(buffers[i], sizeof(**buffers) * count, MPI_BYTE, i, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, &requests[i]);
     }
     for (u32 i = 0;i < world_size;i++) {
-        if (i == rank) continue;
+        if ((i % GROUPS_COUNT_FILL) != group_rank || i == rank) continue;
         MPI_Status status;
         MPI_Probe(MPI_ANY_SOURCE, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, &status);
         int count;
@@ -554,20 +555,21 @@ void send_receive_remaining_insert_buffers() {
     //we know that all are posted because we received the partial buffers
     try_receive_insert_buffers();
     for (u32 i = 0;i < world_size;i++) {
-        if (i == rank) continue;
+        if ((i % GROUPS_COUNT_FILL) != group_rank || i == rank) continue;
         MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
     }
 }
 
 void send_receive_remaining_probe_buffers(int maxres, u64* k1, u64* k2, int* nres, u64* ncandidates) {
     MPI_Request requests[world_size];
+    const int group_rank = rank % GROUPS_COUNT_PROBE;
     for (u32 i = 0;i < world_size;i++) {
-        if (i == rank) continue;
+        if ((i % GROUPS_COUNT_PROBE) != group_rank || i == rank) continue;
         int count = buffer_indices[i];
         MPI_Isend(buffers[i], sizeof(**buffers) * count, MPI_BYTE, i, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, &requests[i]);
     }
     for (u32 i = 0;i < world_size;i++) {
-        if (i == rank) continue;
+        if ((i % GROUPS_COUNT_PROBE) != group_rank || i == rank) continue;
         MPI_Status status;
         MPI_Probe(MPI_ANY_SOURCE, PARTIAL_BUFFER_TAG, MPI_COMM_WORLD, &status);
         int count;
@@ -585,7 +587,7 @@ void send_receive_remaining_probe_buffers(int maxres, u64* k1, u64* k2, int* nre
     //we know that all are posted because we received the partial buffers
     try_receive_probe_buffers(maxres, k1, k2, nres, ncandidates);
     for (u32 i = 0;i < world_size;i++) {
-        if (i == rank) continue;
+        if ((i % GROUPS_COUNT_PROBE) != group_rank || i == rank) continue;
         MPI_Wait(&requests[i], MPI_STATUS_IGNORE);
     }
 }

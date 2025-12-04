@@ -22,11 +22,11 @@
 #ifdef __AVX2__
 #define VECTOR_SIZE 16
 #else
+#ifdef __ARM_NEON
+#define VECTOR_SIZE 16
+#else
 #ifdef __AVX__
 #define VECTOR_SIZE 8
-#else
-#ifdef __ARM_NEON
-#define VECTOR_SIZE 4
 #else
 #define VECTOR_SIZE 1
 #endif
