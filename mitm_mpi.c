@@ -309,7 +309,7 @@ void dict_setup(u64 size) {
 }
 
 /* Insert the binding key |----> value in the dictionnary */
-void dict_insert_hash(u32 hash, u64 key, u64 value) {
+void dict_insert_hash(u64 hash, u64 key, u64 value) {
     u32 expected = EMPTY;
     while (!__atomic_compare_exchange_n(&A[hash].k, &expected, key % PRIME, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
         expected = EMPTY;
@@ -331,7 +331,7 @@ void dict_insert(u64 key, u64 value) {
  *  array must be preallocated of size (at least) `maxval`.
  *  The function returns -1 if there are more than `maxval` results.
  */
-int dict_probe_hash(u32 hash, u64 key, int maxval, u64 values[]) {
+int dict_probe_hash(u64 hash, u64 key, int maxval, u64 values[]) {
     u32 k = key % PRIME;
     int nval = 0;
     for (;;) {
@@ -365,7 +365,7 @@ int dict_probe(u64 key, int maxval, u64 values[]) {
 #define PARTIAL_BUFFER_TAG 0x8
 
 struct buffer_entry {
-    u32 key; // 32-bit key (modulo dict_size)
+    u64 key; // 32-bit key (modulo dict_size)
     struct entry value; // value to insert at this key
 };
 
@@ -474,7 +474,7 @@ int buffer_probe(u64 hash, u64 key, u64 value, int maxval, u64 values[]) {
     if (target == rank) {
         return dict_probe_hash(hash / world_size, key, maxval, values);
     }
-    struct buffer_entry entry = { .key = (u32)(hash / world_size), .value = {.k = (u32)(key % PRIME), .v = value } };
+    struct buffer_entry entry = { .key = hash / world_size, .value = {.k = (u32)(key % PRIME), .v = value } };
     buffer_add(target, entry);
     return 0;
 }
@@ -485,7 +485,7 @@ void buffer_insert(u64 hash, u64 key, u64 value) {
         dict_insert_hash(hash / world_size, key, value);
         return;
     }
-    struct buffer_entry entry = { .key = (u32)(hash / world_size), .value = {.k = (u32)(key % PRIME), .v = value } };
+    struct buffer_entry entry = { .key = hash / world_size, .value = {.k = (u32)(key % PRIME), .v = value } };
     buffer_add(target, entry);
 }
 
