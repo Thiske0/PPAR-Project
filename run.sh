@@ -1,13 +1,14 @@
 #!/bin/bash 
 
-#OAR -l host=2/cpu=2,walltime=0:05:00
+#OAR -l host=8/cpu=2,walltime=0:05:00
 #OAR -O results/mitm_OAR_%jobid%.out
 #OAR -E results/mitm_OAR_%jobid%.err
 #OAR -p paradoxe
 
-N=20
+N=36
 
 BUFFER_SIZE=65536
+PREFILL_BUFFER_SIZE=128
 
 GROUPS_COUNT_FILL=8
 GROUPS_COUNT_PROBE=8
@@ -15,7 +16,7 @@ BSEND_AMOUNT=1000
 
 gcc -Wall -o make_header make_header.c
 
-./make_header --fill-groups $GROUPS_COUNT_FILL --probe-groups $GROUPS_COUNT_PROBE --buffer-size $BUFFER_SIZE --bsend-amount $BSEND_AMOUNT
+./make_header --fill-groups $GROUPS_COUNT_FILL --probe-groups $GROUPS_COUNT_PROBE --buffer-size $BUFFER_SIZE --bsend-amount $BSEND_AMOUNT --prefill-buffer-size $PREFILL_BUFFER_SIZE
 
 # We compile and run on the compute nodes because of the -march=native flag
 mpicc -O3 -march=native -Wall -o mitm_numa mitm_numa.c -fopenmp -lnuma
