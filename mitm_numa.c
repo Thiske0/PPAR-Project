@@ -711,6 +711,8 @@ int main(int argc, char** argv) {
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
+    double start_time = wtime();
+
     numa_nodes = numa_num_configured_nodes();
     if (numa_nodes <= 1) {
         if (rank == 0) {
@@ -773,7 +775,10 @@ int main(int argc, char** argv) {
         MPI_Gatherv(k2_global, nres_global, MPI_UINT64_T, NULL, NULL, NULL, MPI_UINT64_T, 0, MPI_COMM_WORLD);
     }
 
+    double end_time = wtime();
+
     if (rank == 0) {
+        printf("Total time: %.3fs\n", end_time - start_time);
         assert(nres_global > 0);
         /* validation */
         for (int i = 0; i < nres_global; i++) {
