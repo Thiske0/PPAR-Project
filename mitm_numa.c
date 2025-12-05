@@ -411,26 +411,33 @@ struct SPSC_Ring spsc_create() {
 }
 
 /* Consumer: attempt to pop up to 'count' elements into dst (contiguous) */
-void spsc_pop_all(struct SPSC_Ring *r, struct entry* dict, u64 dict_size) {
+void spsc_pop_all(struct SPSC_Ring *r, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres) {
     u32 tail = __atomic_load_n(&r->tail, __ATOMIC_ACQUIRE);
     u32 head = __atomic_load_n(&r->head, __ATOMIC_RELAXED);
     for (; head != tail; head = (head + 1) & (BUFFER_SIZE - 1)) {
         struct queue_entry entry = r->buffer[head];
-        dict_insert_hash(dict, entry.key, entry.value.k, entry.value.v, dict_size);
+        if(is_insert) {
+            dict_insert_hash(dict, entry.key, entry.value.k, entry.value.v, dict_size);
+        } else {
+            u64 x[256];
+            int nx = dict_probe_hash(dict, entry.key, entry.value.k, 256, x, dict_size);
+            assert(nx >= 0);
+            verify_good_pairs(entry.value.v, x, nx, maxres, k1, k2, nres);
+        }
     }
 
     // publish new head
     __atomic_store_n(&r->head, head, __ATOMIC_RELEASE);
 }
 
-void pairring_pop_all(struct QueuePairs* pr, int node, int local_thread_id, struct entry* dict, u64 dict_size) {
+void pairring_pop_all(struct QueuePairs* pr, int node, int local_thread_id, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres) {
     for(int from_node = 0; from_node < numa_nodes; from_node++) {
         if(node == from_node) continue;
-        spsc_pop_all(&pr->queues[node][local_thread_id][from_node], dict, dict_size);
+        spsc_pop_all(&pr->queues[node][local_thread_id][from_node], dict, dict_size, is_insert, maxres, k1, k2, nres);
     }
 }
 
-void spsc_push_many(struct SPSC_Ring *r, const struct queue_entry* src, size_t count, struct QueuePairs* pr, int node, int local_thread_id, struct entry* dict, u64 dict_size) {
+void spsc_push_many(struct SPSC_Ring *r, const struct queue_entry* src, size_t count, struct QueuePairs* pr, int node, int local_thread_id, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres) {
     u32 head, tail, free_entries;
     while(true) {
         head = __atomic_load_n(&r->head, __ATOMIC_ACQUIRE);
@@ -439,7 +446,7 @@ void spsc_push_many(struct SPSC_Ring *r, const struct queue_entry* src, size_t c
         if (free_entries >= count)
             break;
         // not enough space in remote queue, try to pop some entries locally to avoid deadlock
-        pairring_pop_all(pr, node, local_thread_id, dict, dict_size);
+        pairring_pop_all(pr, node, local_thread_id, dict, dict_size, is_insert, maxres, k1, k2, nres);
     };
 
     // write elements
@@ -448,11 +455,6 @@ void spsc_push_many(struct SPSC_Ring *r, const struct queue_entry* src, size_t c
     }
     // publish
     __atomic_store_n(&r->tail, (tail + count) & (BUFFER_SIZE - 1), __ATOMIC_RELEASE);
-}
-
-/* Single-element helpers */
-void spsc_push_one(struct SPSC_Ring *r, const struct queue_entry *item, struct QueuePairs* pr, int node, int local_thread_id, struct entry* dict, u64 dict_size) {
-    spsc_push_many(r, item, 1, pr, node, local_thread_id, dict, dict_size);
 }
 
 struct QueuePairs* pairring_create(int node, int local_thread_id) {
@@ -485,22 +487,22 @@ struct QueuePairs* pairring_create(int node, int local_thread_id) {
     return pr;
 }
 
-void pairring_flush_buffer(struct QueuePairs* pr, int node, int local_thread_id, int target_node, struct entry* dict, u64 dict_size) {
-    spsc_push_many(&pr->queues[target_node][local_thread_id][node], pr->prefill_buffers[node][local_thread_id][target_node], pr->prefill_counts[node][local_thread_id][target_node], pr, node, local_thread_id, dict, dict_size);
+void pairring_flush_buffer(struct QueuePairs* pr, int node, int local_thread_id, int target_node, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres) {
+    spsc_push_many(&pr->queues[target_node][local_thread_id][node], pr->prefill_buffers[node][local_thread_id][target_node], pr->prefill_counts[node][local_thread_id][target_node], pr, node, local_thread_id, dict, dict_size, is_insert, maxres, k1, k2, nres);
+    pr->prefill_counts[node][local_thread_id][target_node] = 0;
 }
 
-void pairring_flush_all_buffers(struct QueuePairs* pr, int node, int local_thread_id, struct entry* dict, u64 dict_size) {
+void pairring_flush_all_buffers(struct QueuePairs* pr, int node, int local_thread_id, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres) {
     for(int target_node = 0; target_node < numa_nodes; target_node++) {
         if(node == target_node) continue;
-        pairring_flush_buffer(pr, node, local_thread_id, target_node, dict, dict_size);
+        pairring_flush_buffer(pr, node, local_thread_id, target_node, dict, dict_size, is_insert, maxres, k1, k2, nres);
     }
 }
 
-void pairring_push(struct QueuePairs* pr, int node, int local_thread_id, struct queue_entry entry, int target_node, struct entry* dict, u64 dict_size) {
+void pairring_push(struct QueuePairs* pr, int node, int local_thread_id, struct queue_entry entry, int target_node, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres) {
     pr->prefill_buffers[node][local_thread_id][target_node][pr->prefill_counts[node][local_thread_id][target_node]] = entry;
     if(++pr->prefill_counts[node][local_thread_id][target_node] == PREFILL_BUFFER_SIZE) {
-        pairring_flush_buffer(pr, node, local_thread_id, target_node, dict, dict_size);
-        pr->prefill_counts[node][local_thread_id][target_node] = 0;
+        pairring_flush_buffer(pr, node, local_thread_id, target_node, dict, dict_size, is_insert, maxres, k1, k2, nres);
     }
 }
 
@@ -537,24 +539,24 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_threa
                         // enqueue for remote insertion
                         struct entry entry = { .k = (u32)(f_value % PRIME), .v = z };
                         struct queue_entry qentry = { .key = hash[j] / (world_size * numa_nodes), .value = entry };
-                        pairring_push(pairrings, node, local_thread_id, qentry, target_node, dict, dict_size);
+                        pairring_push(pairrings, node, local_thread_id, qentry, target_node, dict, dict_size, 1, 0, NULL, NULL, NULL);
                     }
                 }
             }
         }
-        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size);
+        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
     }
-    pairring_flush_all_buffers(pairrings, node, local_thread_id, dict, dict_size);
+    pairring_flush_all_buffers(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
     __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
     int local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
     while(local_done < numa_nodes * num_threads) {
-        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size);
+        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
         local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
     }
     #pragma omp barrier
     
     __atomic_store_n(&done, 0, __ATOMIC_RELEASE);
-    pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size);
+    pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
     #pragma omp barrier
     
     double mid = wtime();

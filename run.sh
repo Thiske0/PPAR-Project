@@ -1,11 +1,11 @@
 #!/bin/bash 
 
-#OAR -l host=8/cpu=2,walltime=0:05:00
+#OAR -l host=2/cpu=2,walltime=0:05:00
 #OAR -O results/mitm_OAR_%jobid%.out
 #OAR -E results/mitm_OAR_%jobid%.err
 #OAR -p paradoxe
 
-N=36
+N=30
 
 BUFFER_SIZE=65536
 PREFILL_BUFFER_SIZE=128
