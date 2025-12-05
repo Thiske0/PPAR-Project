@@ -564,7 +564,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_threa
         printf("Fill: %.3fs\n", mid - start);
     }
 
-    for (u64 yo = local_thread_id * BUFFER_SIZE; yo < N; yo += BUFFER_SIZE * num_threads) {
+    for (u64 yo = (local_thread_id + node * num_threads) * BUFFER_SIZE; yo < N; yo += BUFFER_SIZE * num_threads * numa_nodes) {
         for (u64 y = yo; y < yo + BUFFER_SIZE; y += VECTOR_SIZE) {
             u64 x[256];
             u64 vector[VECTOR_SIZE];
@@ -577,14 +577,33 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_threa
                 int target_rank = hash[j] % world_size;
                 int target_node = (hash[j] / world_size) % numa_nodes;
                 // throw away values that do not belong to this process
-                if (target_rank == rank && target_node == node) {
-                    int nx = dict_probe_hash(dict, hash[j] / (world_size * numa_nodes), y, 256, x, dict_size);
-                    assert(nx >= 0);
-                    verify_good_pairs(z, x, nx, maxres, k1, k2, &nres);
+                if (target_rank == rank) {
+                    if(target_node == node) {
+                        int nx = dict_probe_hash(dict, hash[j] / (world_size * numa_nodes), y, 256, x, dict_size);
+                        assert(nx >= 0);
+                        verify_good_pairs(z, x, nx, maxres, k1, k2, &nres);
+                    } else {
+                        // enqueue for remote probing
+                        struct entry entry = { .k = (u32)(y % PRIME), .v = z };
+                        struct queue_entry qentry = { .key = hash[j] / (world_size * numa_nodes), .value = entry };
+                        pairring_push(pairrings, node, local_thread_id, qentry, target_node, dict, dict_size, 0, maxres, k1, k2, &nres);
+                    }
                 }
             }
         }
+        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
     }
+    pairring_flush_all_buffers(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
+    __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
+    local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
+    while(local_done < numa_nodes * num_threads) {
+        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
+        local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
+    }
+    #pragma omp barrier
+    
+    __atomic_store_n(&done, 0, __ATOMIC_RELEASE);
+    pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
 
     #pragma omp barrier
     if (rank == 0 && node == 0 && local_thread_id == 0) {

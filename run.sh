@@ -1,11 +1,11 @@
 #!/bin/bash 
 
-#OAR -l host=2/cpu=2,walltime=0:05:00
+#OAR -l host=8/cpu=2,walltime=0:05:00
 #OAR -O results/mitm_OAR_%jobid%.out
 #OAR -E results/mitm_OAR_%jobid%.err
 #OAR -p paradoxe
 
-N=30
+N=36
 
 BUFFER_SIZE=65536
 PREFILL_BUFFER_SIZE=128
@@ -13,6 +13,9 @@ PREFILL_BUFFER_SIZE=128
 GROUPS_COUNT_FILL=8
 GROUPS_COUNT_PROBE=8
 BSEND_AMOUNT=1000
+
+set -euo pipefail
+IFS=$'\n\t'
 
 gcc -Wall -o make_header make_header.c
 
