@@ -379,141 +379,156 @@ int dict_probe(struct entry* dict, u64 key, int maxval, u64 values[], u64 dict_s
 /******************************** queue ********************************/
 
 struct queue_entry {
-    u64 key; // 32-bit key (modulo dict_size)
-    struct entry value; // value to insert at this key
-    u32 claimed; // whether the entry is ready to be consumed
+    u64 key;
+    struct entry value;
 };
 
-struct queue_entry*** queues;
-u32** queue_heads;
-u32** queue_tails;
+struct SPSC_Ring {
+    struct queue_entry* buffer;
+    //padding to avoid false sharing
+    u32 head __attribute__((aligned(64)));
+    char pad1[64 - sizeof(u32)];
+    u32 tail __attribute__((aligned(64)));
+    char pad2[64 - sizeof(u32)];
+} __attribute__((aligned(64)));
 
-void queue_setup(int node, int local_thread_id) {
-    if(local_thread_id == 0 && node == 0) {
-        queues = numa_alloc_local(sizeof(*queues) * numa_nodes);
-        queue_heads = numa_alloc_local(sizeof(*queue_heads) * numa_nodes);
-        queue_tails = numa_alloc_local(sizeof(*queue_tails) * numa_nodes);
+struct SPSC_Ring spsc_create() {
+    struct SPSC_Ring r;
+    r.buffer = numa_alloc_local(BUFFER_SIZE * sizeof(struct queue_entry));
+    // touch the memory to ensure allocation
+    for (u32 i = 0; i < BUFFER_SIZE; i +=4096 / sizeof(struct queue_entry)) {
+        r.buffer[i].key = 0;
     }
+    __atomic_store_n(&r.head, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&r.tail, 0, __ATOMIC_RELEASE);
+    return r;
+}
+
+void spsc_push_many(struct SPSC_Ring *r, const struct queue_entry* src, size_t count) {
+    u32 head, tail, free_entries;
+    while(true) {
+        head = __atomic_load_n(&r->head, __ATOMIC_ACQUIRE);
+        tail = __atomic_load_n(&r->tail, __ATOMIC_RELAXED);
+        free_entries = BUFFER_SIZE - (tail - head);
+        if (free_entries >= count)
+            break;
+        // TODO: clear local queue to free space
+    };
+
+    // write elements
+    for (size_t i = 0; i < count; ++i) {
+        r->buffer[(tail + i) & (BUFFER_SIZE - 1)] = src[i];
+    }
+    // publish
+    __atomic_store_n(&r->tail, (tail + count) & (BUFFER_SIZE - 1), __ATOMIC_RELEASE);
+}
+
+/* Consumer: attempt to pop up to 'count' elements into dst (contiguous) */
+void spsc_pop_all(struct SPSC_Ring *r, struct entry* dict, u64 dict_size) {
+    u32 tail = __atomic_load_n(&r->tail, __ATOMIC_ACQUIRE);
+    u32 head = __atomic_load_n(&r->head, __ATOMIC_RELAXED);
+    for (; head != tail; head = (head + 1) & (BUFFER_SIZE - 1)) {
+        struct queue_entry entry = r->buffer[head];
+        dict_insert_hash(dict, entry.key, entry.value.k, entry.value.v, dict_size);
+    }
+
+    // publish new head
+    __atomic_store_n(&r->head, head, __ATOMIC_RELEASE);
+}
+
+/* Single-element helpers */
+void spsc_push_one(struct SPSC_Ring *r, const struct queue_entry *item) {
+    spsc_push_many(r, item, 1);
+}
+
+/******************************** NUMA queues ********************************/
+
+struct QueuePairs {
+    struct SPSC_Ring ***queues; // queues[to_node][thread_id][from_node]
+};
+
+struct QueuePairs* pairring_create(int node, int local_thread_id) {
+    static struct QueuePairs* pr;
+    if(node == 0 && local_thread_id == 0) {
+        pr = (struct QueuePairs*) malloc(sizeof(struct QueuePairs));
+        pr->queues = (struct SPSC_Ring***) malloc(numa_nodes * sizeof(struct SPSC_Ring**));
+    }
+    
     #pragma omp barrier
     if(local_thread_id == 0) {
-        queues[node] = numa_alloc_local(sizeof(**queues) * numa_nodes);
-        queue_heads[node] = numa_alloc_local(sizeof(**queue_heads) * numa_nodes);
-        queue_tails[node] = numa_alloc_local(sizeof(**queue_tails) * numa_nodes);
-        for (int n = 0; n < numa_nodes; n++) {
-            if(n == node)
-                continue;
-            queues[node][n] = numa_alloc_local(sizeof(***queues) * BUFFER_SIZE);
-            queue_heads[node][n] = 0;
-            queue_tails[node][n] = 0;
-            for(u64 j = 0; j < BUFFER_SIZE; j++) {
-                queues[node][n][j].claimed = 0;
-            }
-        }
+        pr->queues[node] = (struct SPSC_Ring**) malloc(num_threads * sizeof(struct SPSC_Ring*));
     }
     #pragma omp barrier
+    pr->queues[node][local_thread_id] = (struct SPSC_Ring*) malloc(numa_nodes * sizeof(struct SPSC_Ring));
+    for(int from_node = 0; from_node < numa_nodes; from_node++) {
+        if(node == from_node) continue;
+        pr->queues[node][local_thread_id][from_node] = spsc_create();
+    }
+    #pragma omp barrier
+    return pr;
 }
 
-int queue_remove(int node, u64* key, struct entry* value, int from_node) {
-    u32 tail = __atomic_load_n(&queue_tails[node][from_node], __ATOMIC_ACQUIRE);
-    while(true) {
-        u32 head = __atomic_load_n(&queue_heads[node][from_node], __ATOMIC_ACQUIRE);
-        if (head == tail) {
-            return 0; // empty
-        }
-        struct queue_entry entry = queues[node][from_node][head];
-
-        u32 new_head = (head + 1) % BUFFER_SIZE;
-        if (__atomic_compare_exchange_n(&queue_heads[node][from_node], &head, new_head, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-            *key = entry.key;
-            *value = entry.value;
-            return 1;
-        }
+void pairring_pop_all(struct QueuePairs* pr, int node, int local_thread_id, struct entry* dict, u64 dict_size) {
+    for(int from_node = 0; from_node < numa_nodes; from_node++) {
+        if(node == from_node) continue;
+        spsc_pop_all(&pr->queues[node][local_thread_id][from_node], dict, dict_size);
     }
 }
 
-void clear_local_queue(int node, struct entry* dict, u64 dict_size) {
-    u64 to_add_key;
-    struct entry to_add_value;
-    for(int n = 0; n < numa_nodes; n++) {
-        if(n == node)
-            continue;
-        while(queue_remove(node, &to_add_key, &to_add_value, n)) {
-            dict_insert_hash(dict, to_add_key, to_add_value.k, to_add_value.v, dict_size);
-        }
-    }
-}
-
-void queue_add(int node, u64 key, struct entry value, int to_node, struct entry* dict, u64 dict_size) {
-    struct queue_entry entry = { .key = key, .value = value, .claimed = 1 };
-    while(true) {
-        u32 head = __atomic_load_n(&queue_heads[to_node][node], __ATOMIC_ACQUIRE);
-        u32 tail = __atomic_load_n(&queue_tails[to_node][node], __ATOMIC_ACQUIRE);
-        u32 new_tail = (tail + 1) % BUFFER_SIZE;
-        if (new_tail == head) {
-            // full
-            // try to remove from own queue to prevent deadlock
-            clear_local_queue(node, dict, dict_size);
-            continue;
-        }
-        u32 expected = 0;
-        if (__atomic_compare_exchange_n(&queues[to_node][node][tail].claimed, &expected, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
-            queues[to_node][node][tail] = entry;
-            __atomic_store_n(&queue_tails[to_node][node], new_tail, __ATOMIC_RELEASE);
-            __atomic_store_n(&queues[to_node][node][tail].claimed, 0, __ATOMIC_RELEASE);
-            return;
-        }
-    }
+void pairring_push(struct QueuePairs* pr, int node, int local_thread_id, struct queue_entry entry, int target_node, struct entry* dict, u64 dict_size) {
+    spsc_push_one(&pr->queues[target_node][local_thread_id][node], &entry);
 }
 
 /******************************************************************************/
 
 int done = 0;
 /* search the "golden collision" */
-int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_thread_id, struct entry* dict, u64 dict_size) {
+int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_thread_id, struct QueuePairs* pairrings, struct entry* dict, u64 dict_size) {
     __atomic_store_n(&done, 0, __ATOMIC_RELEASE);
     double start = wtime();
     u64 N = 1ull << n;
     assert(N % BUFFER_SIZE == 0);
     assert(BUFFER_SIZE % VECTOR_SIZE == 0);
     int nres = 0;
-    u64 reset_freq = VECTOR_SIZE; //BUFFER_SIZE / num_threads;
     #pragma omp barrier
     
-    for (u64 xo = (local_thread_id + node * num_threads) * reset_freq; xo < N; xo += reset_freq * num_threads * numa_nodes) {
-        for(u64 x = xo; x <  xo + reset_freq; x += VECTOR_SIZE) {
+    for (u64 xo = (local_thread_id + node * num_threads) * BUFFER_SIZE; xo < N; xo += BUFFER_SIZE * num_threads * numa_nodes) {
+        for(u64 x = xo; x <  xo + BUFFER_SIZE; x += VECTOR_SIZE) {
             u64 vector[VECTOR_SIZE];
             f_vectorized(x, vector);
             u64 hash[VECTOR_SIZE];
             murmur64_vectorized(vector, hash, dict_size);
             for (int j = 0; j < VECTOR_SIZE; j++) {
                 u64 f_value = vector[j];
+                u64 z = x + j;
                 int target_rank = hash[j] % world_size;
                 int target_node = (hash[j] / world_size) % numa_nodes;
                 // throw away values that do not belong to this process
                 if (target_rank == rank) {
                     if (target_node == node) {
                         // insert directly
-                        dict_insert_hash(dict, hash[j] / (world_size * numa_nodes), hash[j], f_value, dict_size);
+                        dict_insert_hash(dict, hash[j] / (world_size * numa_nodes), f_value, z, dict_size);
                     } else {
                         // enqueue for remote insertion
-                        struct entry entry = { .k = (u32)(hash[j] % PRIME), .v = f_value };
-                        queue_add(node, hash[j] / (world_size * numa_nodes), entry, target_node, dict, dict_size);
+                        struct entry entry = { .k = (u32)(f_value % PRIME), .v = z };
+                        struct queue_entry qentry = { .key = hash[j] / (world_size * numa_nodes), .value = entry };
+                        pairring_push(pairrings, node, local_thread_id, qentry, target_node, dict, dict_size);
                     }
                 }
             }
         }
-        clear_local_queue(node, dict, dict_size);
+        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size);
     }
     __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
     int local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
     while(local_done < numa_nodes * num_threads) {
-        clear_local_queue(node, dict, dict_size);
+        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size);
         local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
     }
     #pragma omp barrier
     
     __atomic_store_n(&done, 0, __ATOMIC_RELEASE);
-    clear_local_queue(node, dict, dict_size);
+    pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size);
     #pragma omp barrier
     
     double mid = wtime();
@@ -701,11 +716,11 @@ int main(int argc, char** argv) {
         u64 dict_size = 1.125 * (1ull << n) / (world_size * numa_nodes);
         struct entry* dict = dict_setup(dict_size, node, local_thread_id);
         // setup queues
-        queue_setup(node, local_thread_id);
+        struct QueuePairs* pairrings = pairring_create(node, local_thread_id);
 
         /* search */
         u64 k1[16], k2[16];
-        int nkey = golden_claw_search(16, k1, k2, node, local_thread_id, dict, dict_size);
+        int nkey = golden_claw_search(16, k1, k2, node, local_thread_id, pairrings, dict, dict_size);
         int index = __atomic_fetch_add(&nres_global, nkey, __ATOMIC_RELAXED);
         for (int i = 0; i < nkey; i++) {
             k1_global[index + i] = k1[i];
