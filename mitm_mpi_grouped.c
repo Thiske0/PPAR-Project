@@ -601,78 +601,107 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
     assert(N % BUFFER_SIZE == 0);
     assert(BUFFER_SIZE % VECTOR_SIZE == 0);
 
-    const int group_fill = rank % GROUPS_COUNT_FILL; /* the group that this process belongs to */
-    const int base_fill = world_size / GROUPS_COUNT_FILL;
-    const int rem_fill = world_size % GROUPS_COUNT_FILL;
-    const int group_size_fill = base_fill + (group_fill < rem_fill ? 1 : 0); /* count of members in the group */
-    const int group_rank_fill = rank / GROUPS_COUNT_FILL; /* index within the group */
-
-#pragma omp parallel for schedule(dynamic, 1)
-    for (u64 y = group_rank_fill * BUFFER_SIZE; y < N; y += group_size_fill * BUFFER_SIZE) {
-        for (u64 x = 0; x < BUFFER_SIZE; x += VECTOR_SIZE) {
-            u64 vector[VECTOR_SIZE];
-            f_vectorized(y + x, vector);
-            u64 hash[VECTOR_SIZE];
-            murmur64_vectorized(vector, hash);
-            for (int j = 0; j < VECTOR_SIZE; j++) {
-                u64 z = y + x + j;
-                u64 f_value = vector[j];
-                int target = hash[j] % world_size;
-                int target_group = target % GROUPS_COUNT_FILL;
-                // throw away values that do not belong to this group
-                if (target_group == group_fill) {
-                    buffer_insert(hash[j], f_value, z);
-                }
-            }
-        }
-        try_receive_insert_buffers();
-    }
-
-    send_receive_remaining_insert_buffers();
-    MPI_Barrier(MPI_COMM_WORLD);
-    reset_buffers();
-
-    double mid = wtime();
-    if (rank == 0) {
-        printf("Fill: %.3fs\n", mid - start);
-    }
-
-    const int group_probe = rank % GROUPS_COUNT_PROBE; /* the group that this process belongs to */
-    const int base_probe = world_size / GROUPS_COUNT_PROBE;
-    const int rem_probe = world_size % GROUPS_COUNT_PROBE;
-    const int group_size_probe = base_probe + (group_probe < rem_probe ? 1 : 0); /* count of members in the group */
-    const int group_rank_probe = rank / GROUPS_COUNT_PROBE; /* index within the group */
+    /* decide chunking */
+    const int MAX_N_IN_MEM = 40; // max n to fit in memory
+    int chunk_bits = 0;
+    if ((int)n > MAX_N_IN_MEM) chunk_bits = (int)n - MAX_N_IN_MEM;
+    u64 chunk_count = 1ull << chunk_bits; // number of chunks
+    int n_chunk = (int)n - chunk_bits; // low bits per chunk
+    u64 N_chunk = 1ull << n_chunk; // size of each chunk
 
     int nres = 0;
     u64 ncandidates = 0;
-#pragma omp parallel for schedule(dynamic, 1) reduction(+:ncandidates)
-    for (u64 y = group_rank_probe * BUFFER_SIZE; y < N; y += group_size_probe * BUFFER_SIZE) {
-        for (u64 zv = 0; zv < BUFFER_SIZE; zv += VECTOR_SIZE) {
-            u64 x[256];
-            u64 vector[VECTOR_SIZE];
-            g_vectorized(y + zv, vector);
-            u64 hash[VECTOR_SIZE];
-            murmur64_vectorized(vector, hash);
-            for (int j = 0; j < VECTOR_SIZE; j++) {
-                u64 z = y + zv + j;
-                u64 y = vector[j];
-                int target = hash[j] % world_size;
-                int group_target = target % GROUPS_COUNT_PROBE;
-                // throw away values that do not belong to this group
-                if (group_target == group_probe) {
-                    int nx = buffer_probe(hash[j], y, z, 256, x);
-                    assert(nx >= 0);
-                    verify_good_pairs(z, x, nx, maxres, k1, k2, &nres, &ncandidates);
-                }
-            }
+
+    for (u64 chunk = 0; chunk < chunk_count; chunk++) {
+        dict_setup(1.125 * (1ull << n) / world_size);
+
+        double chunk_start = wtime();
+        if (rank == 0) {
+            printf("Processing chunk %" PRId64 "/%" PRId64 "...\n", chunk + 1, chunk_count);
         }
 
-        try_receive_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
+        const int group_fill = rank % GROUPS_COUNT_FILL; /* the group that this process belongs to */
+        const int base_fill = world_size / GROUPS_COUNT_FILL;
+        const int rem_fill = world_size % GROUPS_COUNT_FILL;
+        const int group_size_fill = base_fill + (group_fill < rem_fill ? 1 : 0); /* count of members in the group */
+        const int group_rank_fill = rank / GROUPS_COUNT_FILL; /* index within the group */
+
+#pragma omp parallel for schedule(dynamic, 1)
+        for (u64 y = group_rank_fill * BUFFER_SIZE; y < N_chunk; y += group_size_fill * BUFFER_SIZE) {
+            for (u64 x = 0; x < BUFFER_SIZE; x += VECTOR_SIZE) {
+                u64 vector[VECTOR_SIZE];
+                u64 base = (chunk << n_chunk) + y + x;
+                f_vectorized(base, vector);
+                u64 hash[VECTOR_SIZE];
+                murmur64_vectorized(vector, hash);
+                for (int j = 0; j < VECTOR_SIZE; j++) {
+                    u64 local_z = y + x + j;
+                    u64 global_z = (chunk << n_chunk) | local_z;
+                    u64 f_value = vector[j];
+                    int target = hash[j] % world_size;
+                    int target_group = target % GROUPS_COUNT_FILL;
+                    // throw away values that do not belong to this group
+                    if (target_group == group_fill) {
+                        buffer_insert(hash[j], f_value, global_z);
+                    }
+                }
+            }
+            try_receive_insert_buffers();
+        }
+
+        send_receive_remaining_insert_buffers();
+        MPI_Barrier(MPI_COMM_WORLD);
+        reset_buffers();
+
+        double mid = wtime();
+        if (rank == 0) {
+            printf("Chunk %" PRId64 " Fill: %.3fs\n", chunk + 1, mid - chunk_start);
+        }
+
+        const int group_probe = rank % GROUPS_COUNT_PROBE; /* the group that this process belongs to */
+        const int base_probe = world_size / GROUPS_COUNT_PROBE;
+        const int rem_probe = world_size % GROUPS_COUNT_PROBE;
+        const int group_size_probe = base_probe + (group_probe < rem_probe ? 1 : 0); /* count of members in the group */
+        const int group_rank_probe = rank / GROUPS_COUNT_PROBE; /* index within the group */
+
+#pragma omp parallel for schedule(dynamic, 1) reduction(+:ncandidates)
+        for (u64 y = group_rank_probe * BUFFER_SIZE; y < N; y += group_size_probe * BUFFER_SIZE) {
+            for (u64 zv = 0; zv < BUFFER_SIZE; zv += VECTOR_SIZE) {
+                u64 x[256];
+                u64 vector[VECTOR_SIZE];
+                g_vectorized(y + zv, vector);
+                u64 hash[VECTOR_SIZE];
+                murmur64_vectorized(vector, hash);
+                for (int j = 0; j < VECTOR_SIZE; j++) {
+                    u64 z = y + zv + j;
+                    u64 y = vector[j];
+                    int target = hash[j] % world_size;
+                    int group_target = target % GROUPS_COUNT_PROBE;
+                    // throw away values that do not belong to this group
+                    if (group_target == group_probe) {
+                        int nx = buffer_probe(hash[j], y, z, 256, x);
+                        assert(nx >= 0);
+                        verify_good_pairs(z, x, nx, maxres, k1, k2, &nres, &ncandidates);
+                    }
+                }
+            }
+
+            try_receive_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
+        }
+        send_receive_remaining_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
+
+        /* free dictionary */
+        free(A);
+
+        if (rank == 0) {
+            printf("Chunk %" PRId64 " Probe: %.3fs. %" PRId64 " candidate pairs tested\n", chunk + 1, wtime() - mid, ncandidates);
+        }
+        reset_buffers();
+        MPI_Barrier(MPI_COMM_WORLD);
     }
-    send_receive_remaining_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
+
     if (rank == 0) {
         MPI_Reduce(MPI_IN_PLACE, &ncandidates, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
-        printf("Probe: %.3fs. %" PRId64 " candidate pairs tested\n", wtime() - mid, ncandidates);
         int nres_per_process[world_size];
         MPI_Gather(&nres, 1, MPI_INT, nres_per_process, 1, MPI_INT, 0, MPI_COMM_WORLD);
         int offsets[world_size];
@@ -683,6 +712,8 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
         MPI_Gatherv(MPI_IN_PLACE, nres, MPI_UINT64_T, k1, nres_per_process, offsets, MPI_UINT64_T, 0, MPI_COMM_WORLD);
         MPI_Gatherv(MPI_IN_PLACE, nres, MPI_UINT64_T, k2, nres_per_process, offsets, MPI_UINT64_T, 0, MPI_COMM_WORLD);
         nres = offsets[world_size - 1] + nres_per_process[world_size - 1];
+        printf("Total time: %.3fs\n", wtime() - start);
+        printf("Total candidate pairs tested: %" PRId64 "\n", ncandidates);
     } else {
         MPI_Reduce(&ncandidates, NULL, 1, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
         MPI_Gather(&nres, 1, MPI_INT, NULL, 0, MPI_INT, 0, MPI_COMM_WORLD);
@@ -821,7 +852,6 @@ int main(int argc, char** argv) {
         printf("Using %d groups for fill, %d groups for probe\n", GROUPS_COUNT_FILL, GROUPS_COUNT_PROBE);
     }
 
-    dict_setup(1.125 * (1ull << n) / world_size);
     init_buffers();
 
     /* search */
