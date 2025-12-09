@@ -41,6 +41,7 @@ struct __attribute__((packed)) entry { u32 k; u64 v; };  /* hash table entry */
 /***************************** global variables ******************************/
 
 u64 n = 0;         /* block size (in bits) */
+u64 reduce = 0; /* number of bits to reduce memory by */
 u64 mask;          /* this is 2**n - 1 */
 
 u64 dict_size;     /* number of slots in the hash table */
@@ -289,6 +290,12 @@ void verify_good_pairs(u64 z, u64* x, int nx, int maxres, u64* k1, u64* k2, int*
 static const u32 EMPTY = 0xffffffff;
 static const u64 PRIME = 0xfffffffb;
 
+void reset_dict() {
+#pragma omp parallel for schedule(dynamic, 8192)
+    for (u64 i = 0; i < dict_size; i++)
+        A[i].k = EMPTY;
+}
+
 /* allocate a hash table with `size` slots (12*size bytes) */
 void dict_setup(u64 size) {
     dict_size = size;
@@ -304,9 +311,7 @@ void dict_setup(u64 size) {
         exit(1);
     }
 
-#pragma omp parallel for schedule(dynamic, 8192)
-    for (u64 i = 0; i < dict_size; i++)
-        A[i].k = EMPTY;
+    reset_dict();
 }
 
 /* Insert the binding key |----> value in the dictionnary */
@@ -601,19 +606,15 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
     assert(N % BUFFER_SIZE == 0);
     assert(BUFFER_SIZE % VECTOR_SIZE == 0);
 
-    /* decide chunking */
-    const int MAX_N_IN_MEM = 40; // max n to fit in memory
-    int chunk_bits = 0;
-    if ((int)n > MAX_N_IN_MEM) chunk_bits = (int)n - MAX_N_IN_MEM;
-    u64 chunk_count = 1ull << chunk_bits; // number of chunks
-    int n_chunk = (int)n - chunk_bits; // low bits per chunk
+    /* chunking */
+    u64 chunk_count = 1ull << reduce; // number of chunks
+    int n_chunk = (int)n - reduce; // low bits per chunk
     u64 N_chunk = 1ull << n_chunk; // size of each chunk
 
     int nres = 0;
     u64 ncandidates = 0;
 
     for (u64 chunk = 0; chunk < chunk_count; chunk++) {
-        dict_setup(1.125 * (1ull << n) / world_size);
 
         double chunk_start = wtime();
         if (rank == 0) {
@@ -635,14 +636,12 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
                 u64 hash[VECTOR_SIZE];
                 murmur64_vectorized(vector, hash);
                 for (int j = 0; j < VECTOR_SIZE; j++) {
-                    u64 local_z = y + x + j;
-                    u64 global_z = (chunk << n_chunk) | local_z;
                     u64 f_value = vector[j];
                     int target = hash[j] % world_size;
                     int target_group = target % GROUPS_COUNT_FILL;
                     // throw away values that do not belong to this group
                     if (target_group == group_fill) {
-                        buffer_insert(hash[j], f_value, global_z);
+                        buffer_insert(hash[j], f_value, base + j);
                     }
                 }
             }
@@ -690,12 +689,10 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[]) {
         }
         send_receive_remaining_probe_buffers(maxres, k1, k2, &nres, &ncandidates);
 
-        /* free dictionary */
-        free(A);
-
         if (rank == 0) {
-            printf("Chunk %" PRId64 " Probe: %.3fs. %" PRId64 " candidate pairs tested\n", chunk + 1, wtime() - mid, ncandidates);
+            printf("Chunk %" PRId64 " Probe: %.3fs\n", chunk + 1, wtime() - mid);
         }
+        reset_dict();
         reset_buffers();
         MPI_Barrier(MPI_COMM_WORLD);
     }
@@ -734,6 +731,7 @@ void usage(char** argv) {
     printf("--C0 N                      1st ciphertext (in hex)\n");
     printf("--C1 N                      2nd ciphertext (in hex)\n");
     printf("--online                    get a problem online\n");
+    printf("--reduce N                  reduce memory footprint by a factor 2^n, requiring 2^n times more computation\n");
     printf("\n");
     printf("n is required, either (CO and C1) or online is required\n");
     exit(0);
@@ -745,6 +743,7 @@ void process_command_line_options(int argc, char** argv) {
             {"C0", required_argument, NULL, '0'},
             {"C1", required_argument, NULL, '1'},
             {"online", no_argument, NULL, 'o'},
+            {"reduce", required_argument, NULL, 'r'},
             {NULL, 0, NULL, 0}
     };
     char ch;
@@ -771,6 +770,9 @@ void process_command_line_options(int argc, char** argv) {
             break;
         case 'o':
             online = 1;
+            break;
+        case 'r':
+            reduce = atoi(optarg);
             break;
         default:
             fprintf(stderr, "Unknown option\n");
@@ -851,7 +853,8 @@ int main(int argc, char** argv) {
         printf("Using %d processes, %d threads and vector size %d\n", world_size, num_threads, VECTOR_SIZE);
         printf("Using %d groups for fill, %d groups for probe\n", GROUPS_COUNT_FILL, GROUPS_COUNT_PROBE);
     }
-
+    
+    dict_setup(1.125 * (1ull << (n - reduce)) / world_size);
     init_buffers();
 
     /* search */
