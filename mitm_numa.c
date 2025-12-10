@@ -42,6 +42,7 @@ struct __attribute__((packed)) entry { u32 k; u64 v; };  /* hash table entry */
 /***************************** global variables ******************************/
 
 u64 n = 0;         /* block size (in bits) */
+u64 reduce = 0; /* number of bits to reduce memory by */
 u64 mask;          /* this is 2**n - 1 */
 
 /* (P, C) : two plaintext-ciphertext pairs */
@@ -286,6 +287,15 @@ void verify_good_pairs(u64 z, u64* x, int nx, int maxres, u64* k1, u64* k2, int*
 #define EMPTY 0xffffffff
 #define PRIME 0xfffffffb
 
+void reset_dict(struct entry* dict, u64 size, int local_thread_id) {
+    for(u64 i = BUFFER_SIZE *  local_thread_id; i < size; i+= num_threads * BUFFER_SIZE) {
+        for(u64 j = i; j < i + BUFFER_SIZE && j < size; j++) {
+            dict[j].k = EMPTY;
+        }
+    }
+
+    #pragma omp barrier
+}
 
 /* allocate a hash table with `size` slots (12*size bytes) */
 struct entry* dict_setup(u64 size, int node, int local_thread_id) {
@@ -315,13 +325,8 @@ struct entry* dict_setup(u64 size, int node, int local_thread_id) {
 
     #pragma omp barrier
     struct entry* dict = dicts[node];
-    for(u64 i = BUFFER_SIZE *  local_thread_id; i < size; i+= num_threads * BUFFER_SIZE) {
-        for(u64 j = i; j < i + BUFFER_SIZE && j < size; j++) {
-            dict[j].k = EMPTY;
-        }
-    }
+    reset_dict(dict, size, local_thread_id);
 
-    #pragma omp barrier
     return dict;
 }
 
@@ -512,102 +517,116 @@ int done = 0;
 /* search the "golden collision" */
 int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_thread_id, struct QueuePairs* pairrings, struct entry* dict, u64 dict_size) {
     __atomic_store_n(&done, 0, __ATOMIC_RELEASE);
-    double start = wtime();
     u64 N = 1ull << n;
-    assert(N % BUFFER_SIZE == 0);
+    #pragma omp barrier
+
+    /* chunking */
+    u64 chunk_count = 1ull << reduce; // number of chunks
+    int n_chunk = (int)n - reduce; // low bits per chunk
+    assert((1 << n_chunk) % BUFFER_SIZE == 0);
     assert(BUFFER_SIZE % VECTOR_SIZE == 0);
+
     int nres = 0;
-    #pragma omp barrier
     
-    for (u64 xo = (local_thread_id + node * num_threads) * BUFFER_SIZE; xo < N; xo += BUFFER_SIZE * num_threads * numa_nodes) {
-        for(u64 x = xo; x <  xo + BUFFER_SIZE; x += VECTOR_SIZE) {
-            u64 vector[VECTOR_SIZE];
-            f_vectorized(x, vector);
-            u64 hash[VECTOR_SIZE];
-            murmur64_vectorized(vector, hash, dict_size);
-            for (int j = 0; j < VECTOR_SIZE; j++) {
-                u64 f_value = vector[j];
-                u64 z = x + j;
-                int target_rank = hash[j] % world_size;
-                int target_node = (hash[j] / world_size) % numa_nodes;
-                // throw away values that do not belong to this process
-                if (target_rank == rank) {
-                    if (target_node == node) {
-                        // insert directly
-                        dict_insert_hash(dict, hash[j] / (world_size * numa_nodes), f_value, z, dict_size);
-                    } else {
-                        // enqueue for remote insertion
-                        struct entry entry = { .k = (u32)(f_value % PRIME), .v = z };
-                        struct queue_entry qentry = { .key = hash[j] / (world_size * numa_nodes), .value = entry };
-                        pairring_push(pairrings, node, local_thread_id, qentry, target_node, dict, dict_size, 1, 0, NULL, NULL, NULL);
+    for (u64 chunk = 0; chunk < chunk_count; chunk++) {
+        double start = wtime();
+        if (rank == 0 && node == 0 && local_thread_id == 0) {
+            printf("Processing chunk %" PRId64 "/%" PRId64 "...\n", chunk + 1, chunk_count);
+        }
+        
+        for (u64 xo = (local_thread_id + node * num_threads) * BUFFER_SIZE + (chunk << n_chunk); xo < ((chunk + 1) << n_chunk); xo += BUFFER_SIZE * num_threads * numa_nodes) {
+            for(u64 x = xo; x <  xo + BUFFER_SIZE; x += VECTOR_SIZE) {
+                u64 vector[VECTOR_SIZE];
+                f_vectorized(x, vector);
+                u64 hash[VECTOR_SIZE];
+                murmur64_vectorized(vector, hash, dict_size);
+                for (int j = 0; j < VECTOR_SIZE; j++) {
+                    u64 f_value = vector[j];
+                    u64 z = x + j;
+                    int target_rank = hash[j] % world_size;
+                    int target_node = (hash[j] / world_size) % numa_nodes;
+                    // throw away values that do not belong to this process
+                    if (target_rank == rank) {
+                        if (target_node == node) {
+                            // insert directly
+                            dict_insert_hash(dict, hash[j] / (world_size * numa_nodes), f_value, z, dict_size);
+                        } else {
+                            // enqueue for remote insertion
+                            struct entry entry = { .k = (u32)(f_value % PRIME), .v = z };
+                            struct queue_entry qentry = { .key = hash[j] / (world_size * numa_nodes), .value = entry };
+                            pairring_push(pairrings, node, local_thread_id, qentry, target_node, dict, dict_size, 1, 0, NULL, NULL, NULL);
+                        }
                     }
                 }
             }
+            pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
         }
+        pairring_flush_all_buffers(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
+        __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
+        int local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
+        while(local_done < numa_nodes * num_threads) {
+            pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
+            local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
+        }
+        #pragma omp barrier
+        
+        __atomic_store_n(&done, 0, __ATOMIC_RELEASE);
         pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
-    }
-    pairring_flush_all_buffers(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
-    __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
-    int local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
-    while(local_done < numa_nodes * num_threads) {
-        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
-        local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
-    }
-    #pragma omp barrier
-    
-    __atomic_store_n(&done, 0, __ATOMIC_RELEASE);
-    pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 1, 0, NULL, NULL, NULL);
-    #pragma omp barrier
-    
-    double mid = wtime();
-    if (rank == 0 && node == 0 && local_thread_id == 0) {
-        printf("Fill: %.3fs\n", mid - start);
-    }
+        #pragma omp barrier
+        
+        double mid = wtime();
+        if (rank == 0 && node == 0 && local_thread_id == 0) {
+            printf("Fill: %.3fs\n", mid - start);
+        }
 
-    for (u64 yo = (local_thread_id + node * num_threads) * BUFFER_SIZE; yo < N; yo += BUFFER_SIZE * num_threads * numa_nodes) {
-        for (u64 y = yo; y < yo + BUFFER_SIZE; y += VECTOR_SIZE) {
-            u64 x[256];
-            u64 vector[VECTOR_SIZE];
-            g_vectorized(y, vector);
-            u64 hash[VECTOR_SIZE];
-            murmur64_vectorized(vector, hash, dict_size);
-            for (int j = 0; j < VECTOR_SIZE; j++) {
-                u64 z = y + j;
-                u64 y = vector[j];
-                int target_rank = hash[j] % world_size;
-                int target_node = (hash[j] / world_size) % numa_nodes;
-                // throw away values that do not belong to this process
-                if (target_rank == rank) {
-                    if(target_node == node) {
-                        int nx = dict_probe_hash(dict, hash[j] / (world_size * numa_nodes), y, 256, x, dict_size);
-                        assert(nx >= 0);
-                        verify_good_pairs(z, x, nx, maxres, k1, k2, &nres);
-                    } else {
-                        // enqueue for remote probing
-                        struct entry entry = { .k = (u32)(y % PRIME), .v = z };
-                        struct queue_entry qentry = { .key = hash[j] / (world_size * numa_nodes), .value = entry };
-                        pairring_push(pairrings, node, local_thread_id, qentry, target_node, dict, dict_size, 0, maxres, k1, k2, &nres);
+        for (u64 yo = (local_thread_id + node * num_threads) * BUFFER_SIZE; yo < N; yo += BUFFER_SIZE * num_threads * numa_nodes) {
+            for (u64 y = yo; y < yo + BUFFER_SIZE; y += VECTOR_SIZE) {
+                u64 x[256];
+                u64 vector[VECTOR_SIZE];
+                g_vectorized(y, vector);
+                u64 hash[VECTOR_SIZE];
+                murmur64_vectorized(vector, hash, dict_size);
+                for (int j = 0; j < VECTOR_SIZE; j++) {
+                    u64 z = y + j;
+                    u64 y = vector[j];
+                    int target_rank = hash[j] % world_size;
+                    int target_node = (hash[j] / world_size) % numa_nodes;
+                    // throw away values that do not belong to this process
+                    if (target_rank == rank) {
+                        if(target_node == node) {
+                            int nx = dict_probe_hash(dict, hash[j] / (world_size * numa_nodes), y, 256, x, dict_size);
+                            assert(nx >= 0);
+                            verify_good_pairs(z, x, nx, maxres, k1, k2, &nres);
+                        } else {
+                            // enqueue for remote probing
+                            struct entry entry = { .k = (u32)(y % PRIME), .v = z };
+                            struct queue_entry qentry = { .key = hash[j] / (world_size * numa_nodes), .value = entry };
+                            pairring_push(pairrings, node, local_thread_id, qentry, target_node, dict, dict_size, 0, maxres, k1, k2, &nres);
+                        }
                     }
                 }
             }
+            pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
         }
-        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
-    }
-    pairring_flush_all_buffers(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
-    __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
-    local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
-    while(local_done < numa_nodes * num_threads) {
-        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
+        pairring_flush_all_buffers(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
+        __atomic_fetch_add(&done, 1, __ATOMIC_RELEASE);
         local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
-    }
-    #pragma omp barrier
-    
-    __atomic_store_n(&done, 0, __ATOMIC_RELEASE);
-    pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
+        while(local_done < numa_nodes * num_threads) {
+            pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
+            local_done = __atomic_load_n(&done, __ATOMIC_ACQUIRE);
+        }
+        #pragma omp barrier
+        
+        __atomic_store_n(&done, 0, __ATOMIC_RELEASE);
+        pairring_pop_all(pairrings, node, local_thread_id, dict, dict_size, 0, maxres, k1, k2, &nres);
+        #pragma omp barrier
 
-    #pragma omp barrier
-    if (rank == 0 && node == 0 && local_thread_id == 0) {
-        printf("Probe: %.3fs\n", wtime() - mid);
+        reset_dict(dict, dict_size, local_thread_id);
+        #pragma omp barrier
+        
+        if (rank == 0 && node == 0 && local_thread_id == 0) {
+            printf("Probe: %.3fs\n", wtime() - mid);
+        }
     }
 
     if (nres > maxres)
@@ -624,6 +643,7 @@ void usage(char** argv) {
     printf("--C0 N                      1st ciphertext (in hex)\n");
     printf("--C1 N                      2nd ciphertext (in hex)\n");
     printf("--online                    get a problem online\n");
+    printf("--reduce N                  reduce memory footprint by a factor 2^n, requiring 2^n times more computation\n");
     printf("\n");
     printf("n is required, either (CO and C1) or online is required\n");
     exit(0);
@@ -635,6 +655,7 @@ void process_command_line_options(int argc, char** argv) {
             {"C0", required_argument, NULL, '0'},
             {"C1", required_argument, NULL, '1'},
             {"online", no_argument, NULL, 'o'},
+            {"reduce", required_argument, NULL, 'r'},
             {NULL, 0, NULL, 0}
     };
     char ch;
@@ -661,6 +682,9 @@ void process_command_line_options(int argc, char** argv) {
             break;
         case 'o':
             online = 1;
+            break;
+        case 'r':
+            reduce = atoi(optarg);
             break;
         default:
             fprintf(stderr, "Unknown option\n");
@@ -762,7 +786,7 @@ int main(int argc, char** argv) {
         numa_set_localalloc();
 
         // setup dictionary
-        u64 dict_size = 1.125 * (1ull << n) / (world_size * numa_nodes);
+        u64 dict_size = 1.125 * (1ull << (n - reduce)) / (world_size * numa_nodes);
         struct entry* dict = dict_setup(dict_size, node, local_thread_id);
         // setup queues
         struct QueuePairs* pairrings = pairring_create(node, local_thread_id);
