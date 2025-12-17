@@ -523,7 +523,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_threa
     /* chunking */
     u64 chunk_count = 1ull << reduce; // number of chunks
     int n_chunk = (int)n - reduce; // low bits per chunk
-    assert((1 << n_chunk) % BUFFER_SIZE == 0);
+    assert((1ull << n_chunk) % BUFFER_SIZE == 0);
     assert(BUFFER_SIZE % VECTOR_SIZE == 0);
 
     int nres = 0;
