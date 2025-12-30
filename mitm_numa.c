@@ -856,7 +856,7 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_threa
     /* chunking */
     u64 chunk_count = 1ull << reduce; // number of chunks
     int n_chunk = (int)n - reduce; // low bits per chunk
-    assert((1ull << n_chunk) % (BLOCK_SIZE * GROUPS_COUNT_FILL) == 0);
+    assert((1ull << n_chunk) % BLOCK_SIZE == 0);
     assert(BLOCK_SIZE % VECTOR_SIZE == 0);
     assert(BUFFER_SIZE % VECTOR_SIZE == 0);
     assert(BUFFER_SIZE >= BLOCK_SIZE);
@@ -926,7 +926,6 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_threa
         if (local_thread_id == 0 && node == 0) {
             // send the final buffers and notify others that we are done
             try_send_buffers();
-            try_recieve_buffers(pairrings, dict, dict_size, 1, 0, NULL, NULL, NULL);
             send_receive_remaining_buffers(pairrings, dict, dict_size, 1, 0, NULL, NULL, NULL);
             try_clear_recieve_buffer(node, local_thread_id, pairrings, dict, dict_size, 1, 0, NULL, NULL, NULL);
             __atomic_store_n(&main_done, 1, __ATOMIC_RELEASE);
@@ -1012,7 +1011,6 @@ int golden_claw_search(int maxres, u64 k1[], u64 k2[], int node, int local_threa
         if (local_thread_id == 0 && node == 0) {
             // send the final buffers and notify others that we are done
             try_send_buffers();
-            try_recieve_buffers(pairrings, dict, dict_size, 0, maxres, k1, k2, &nres);
             send_receive_remaining_buffers(pairrings, dict, dict_size, 0, maxres, k1, k2, &nres);
             try_clear_recieve_buffer(node, local_thread_id, pairrings, dict, dict_size, 0, maxres, k1, k2, &nres);
             __atomic_store_n(&main_done, 1, __ATOMIC_RELEASE);
@@ -1113,7 +1111,7 @@ void process_command_line_options(int argc, char** argv) {
         /* fetch problem from server */
         srand(time(NULL));
         rand();
-        int version = 444; //rand() % 1000;
+        int version = rand() % 1000;
         char url[256];
         sprintf(url, "https://ppar.tme-crypto.fr/mathis.poppe.%d/%llu", version, (unsigned long long)n);
         printf("Fetching problem from %s\n", url);
