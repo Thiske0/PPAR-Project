@@ -1,15 +1,15 @@
 #!/bin/bash 
 
-#OAR -l host=60/cpu=2,walltime=4:00:00
+#OAR -l host=30/cpu=2,walltime=13:30:00
 #OAR -O results/mitm_OAR_%jobid%.out
 #OAR -E results/mitm_OAR_%jobid%.err
 #OAR -p paradoxe
 
 N=28
-REDUCE=2
+REDUCE=0
 
-BLOCK_SIZE=1048576
-BUFFER_SIZE=134217728
+BLOCK_SIZE=65536
+BUFFER_SIZE=1048576
 QUEUE_SIZE=65536
 PREFILL_BUFFER_SIZE=1024
 
