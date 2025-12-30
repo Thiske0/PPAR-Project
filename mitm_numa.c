@@ -1199,7 +1199,7 @@ int main(int argc, char** argv) {
         numa_set_localalloc();
 
         // setup dictionary
-        u64 dict_size = 1.125 * (1ull << (n - reduce)) / (world_size * numa_nodes);
+        u64 dict_size = 1.2 * (1ull << (n - reduce)) / (world_size * numa_nodes);
         struct entry* dict = dict_setup(dict_size, node, local_thread_id);
         // setup queues
         struct QueuePairs* pairrings = pairring_create(node, local_thread_id);
