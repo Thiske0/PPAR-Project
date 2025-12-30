@@ -1,0 +1,8 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.414/28
+Running with n=28, C0=(0661ff40, 0309b981) and C1=(bb288736, 23245583)
+Using 16 processes, 2 numa nodes, 52 threads and vector size 32
+Using 2 groups
+Dictionary size: 2 x 28.3MB
+Processing chunk 1/4...
+Fill: 0.580s
+SOLUTION FOUND!
