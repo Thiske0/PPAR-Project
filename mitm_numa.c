@@ -575,8 +575,6 @@ u64**** mpi_prefill_buffers; // prefill_buffers[node][thread_id][to_rank][PREFIL
 u32*** mpi_prefill_counts; // prefill_counts[node][thread_id][to_rank]
 
 void init_buffers(int node, int local_thread_id) {
-    assert(GROUPS_COUNT_FILL == GROUPS_COUNT_PROBE);
-
     if (node == 0 && local_thread_id == 0) {
         buffers = (u64***)numa_alloc_local(numa_nodes * sizeof(*buffers));
         requests = (MPI_Request*)numa_alloc_local(BSEND_AMOUNT * sizeof(*requests));
@@ -653,6 +651,7 @@ void send_buffer(int prepared_buffer_index, int to_rank, struct QueuePairs* pair
 void try_clear_recieve_buffer(int node, int local_thread_id, struct QueuePairs* pairrings, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres);
 void try_send_buffers(struct QueuePairs* pairrings, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres);
 
+u32 current_recieve_index = 0;
 void buffer_add_multiple(u64* entries, u32 count, int to_rank, int node, int local_thread_id, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres, struct QueuePairs* pr) {
     while (count > 0) {
         __atomic_fetch_add(&writers[node][to_rank % GROUPS_COUNT_FILL], 1, __ATOMIC_ACQUIRE);
@@ -672,12 +671,17 @@ void buffer_add_multiple(u64* entries, u32 count, int to_rank, int node, int loc
                 // busy wait
             }
             // buffer is full, need to clear it
-            int current = 0;
+            u32 start = __atomic_fetch_add(&current_recieve_index, 13, __ATOMIC_ACQUIRE) % BSEND_AMOUNT;
+            int current = start;
             int wanted = -1;
             // -2 means "being prepared"
             while (__atomic_compare_exchange_n(&prepared_outgoing_used[current], &wanted, -2, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) == false) {
                 current += 1;
+                wanted = -1;
                 if (current == BSEND_AMOUNT) {
+                    current = 0;
+                }
+                if (current == start) {
                     // all prepared buffers are used, try to free some
                     pairring_pop_all(pr, node, local_thread_id, dict, dict_size, is_insert, maxres, k1, k2, nres);
                     if (node == 0 && local_thread_id == 0) {
@@ -686,7 +690,6 @@ void buffer_add_multiple(u64* entries, u32 count, int to_rank, int node, int loc
                     } else {
                         try_clear_recieve_buffer(node, local_thread_id, pr, dict, dict_size, is_insert, maxres, k1, k2, nres);
                     }
-                    current = 0;
                 }
             }
             memcpy(prepared_outgoing_buffers[current], buffers[node][to_rank % GROUPS_COUNT_FILL], BUFFER_SIZE * sizeof(u64));
@@ -1230,6 +1233,8 @@ int main(int argc, char** argv) {
     assert(BUFFER_SIZE < 1 << 30);
     assert(BLOCK_SIZE < 1 << 20);
     assert(QUEUE_SIZE < 1 << 30);
+    assert(world_size % GROUPS_COUNT_FILL == 0);
+    assert(GROUPS_COUNT_FILL == GROUPS_COUNT_PROBE);
 
     process_command_line_options(argc, argv);
     num_threads = omp_get_max_threads() / numa_nodes;
