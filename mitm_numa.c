@@ -567,6 +567,8 @@ int futex_wake_all(int* addr) {
 u64*** buffers; // group_size buffers per NUMA node; buffers[node][to_rank][BUFFER_SIZE]
 MPI_Request* requests; // pending requests; requests[BSEND_AMOUNT]
 u64** outgoing_request_buffers; // buffers used for outgoing requests; outgoing_request_buffers[BSEND_AMOUNT][BUFFER_SIZE]
+u64** prepared_outgoing_buffers; // buffers used for prepared outgoing requests; prepared_outgoing_buffers[BSEND_AMOUNT][BUFFER_SIZE]
+int* prepared_outgoing_used; // indicates whether prepared_outgoing_buffers[i] is used; prepared_outgoing_used[BSEND_AMOUNT], -1 if not used, >=0 indicates rank to send to
 int32_t** buffer_indices; // current index in each buffer; buffer_indices[node][to_rank]
 u32** writers; // number of writers in each buffer; writers[node][to_rank]
 u64**** mpi_prefill_buffers; // prefill_buffers[node][thread_id][to_rank][PREFILL_BUFFER_SIZE]
@@ -579,8 +581,12 @@ void init_buffers(int node, int local_thread_id) {
         buffers = (u64***)numa_alloc_local(numa_nodes * sizeof(*buffers));
         requests = (MPI_Request*)numa_alloc_local(BSEND_AMOUNT * sizeof(*requests));
         outgoing_request_buffers = (u64**)numa_alloc_local(BSEND_AMOUNT * sizeof(*outgoing_request_buffers));
+        prepared_outgoing_buffers = (u64**)numa_alloc_local(BSEND_AMOUNT * sizeof(*prepared_outgoing_buffers));
+        prepared_outgoing_used = (int*)numa_alloc_local(BSEND_AMOUNT * sizeof(*prepared_outgoing_used));
         for (int i = 0; i < BSEND_AMOUNT; i++) {
             outgoing_request_buffers[i] = (u64*)numa_alloc_local(BUFFER_SIZE * sizeof(**outgoing_request_buffers));
+            prepared_outgoing_buffers[i] = (u64*)numa_alloc_local(BUFFER_SIZE * sizeof(**prepared_outgoing_buffers));
+            prepared_outgoing_used[i] = -1;
             requests[i] = MPI_REQUEST_NULL;
         }
         buffer_indices = (int32_t**)numa_alloc_local(numa_nodes * sizeof(*buffer_indices));
@@ -616,7 +622,7 @@ void init_buffers(int node, int local_thread_id) {
 void try_recieve_buffers(struct QueuePairs* pairrings, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres);
 
 int send_index = 0;
-void send_buffer(int from_node, int to_rank, struct QueuePairs* pairrings, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres) {
+void send_buffer(int prepared_buffer_index, int to_rank, struct QueuePairs* pairrings, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres) {
     while (true) {
         int flag;
         MPI_Status status;
@@ -632,7 +638,10 @@ void send_buffer(int from_node, int to_rank, struct QueuePairs* pairrings, struc
             send_index = 0;
         }
     }
-    memcpy(outgoing_request_buffers[send_index], buffers[from_node][to_rank % GROUPS_COUNT_FILL], sizeof(**buffers) * BUFFER_SIZE);
+    u64* new_buffer = outgoing_request_buffers[send_index];
+    outgoing_request_buffers[send_index] = prepared_outgoing_buffers[prepared_buffer_index];
+    prepared_outgoing_buffers[prepared_buffer_index] = new_buffer;
+    __atomic_store_n(&prepared_outgoing_used[prepared_buffer_index], -1, __ATOMIC_RELEASE);
     MPI_Isend(outgoing_request_buffers[send_index], sizeof(**buffers) * BUFFER_SIZE, MPI_BYTE, to_rank,
         FULL_BUFFER_TAG, MPI_COMM_WORLD, &requests[send_index]);
     send_index += 1;
@@ -642,55 +651,72 @@ void send_buffer(int from_node, int to_rank, struct QueuePairs* pairrings, struc
 }
 
 void try_clear_recieve_buffer(int node, int local_thread_id, struct QueuePairs* pairrings, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres);
+void try_send_buffers(struct QueuePairs* pairrings, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres);
 
 void buffer_add_multiple(u64* entries, u32 count, int to_rank, int node, int local_thread_id, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres, struct QueuePairs* pr) {
-    __atomic_fetch_add(&writers[node][to_rank % GROUPS_COUNT_FILL], 1, __ATOMIC_ACQUIRE);
-    u32 index = __atomic_fetch_add(&buffer_indices[node][to_rank % GROUPS_COUNT_FILL], count, __ATOMIC_ACQUIRE);
-    u32 space_left = BUFFER_SIZE - index;
-    if (BUFFER_SIZE > index) {
-        u32 to_copy = (count < space_left) ? count : space_left;
-        memcpy(&buffers[node][to_rank % GROUPS_COUNT_FILL][index], entries, to_copy * sizeof(u64));
+    while (count > 0) {
+        __atomic_fetch_add(&writers[node][to_rank % GROUPS_COUNT_FILL], 1, __ATOMIC_ACQUIRE);
+        u32 index = __atomic_fetch_add(&buffer_indices[node][to_rank % GROUPS_COUNT_FILL], count, __ATOMIC_ACQUIRE);
+        u32 space_left = BUFFER_SIZE - index;
+        int has_to_clear = index < BUFFER_SIZE && index + count >= BUFFER_SIZE;
+        if (index < BUFFER_SIZE) {
+            u32 to_copy = (count < space_left) ? count : space_left;
+            memcpy(&buffers[node][to_rank % GROUPS_COUNT_FILL][index], entries, to_copy * sizeof(u64));
+            entries += to_copy;
+            count -= to_copy;
+        }
         __atomic_fetch_sub(&writers[node][to_rank % GROUPS_COUNT_FILL], 1, __ATOMIC_RELEASE);
-        if (to_copy == count) {
-            return;
+        if (has_to_clear) {
+            // wait for other writers to complete
+            while (__atomic_load_n(&writers[node][to_rank % GROUPS_COUNT_FILL], __ATOMIC_ACQUIRE) > 0) {
+                // busy wait
+            }
+            // buffer is full, need to clear it
+            int current = 0;
+            int wanted = -1;
+            // -2 means "being prepared"
+            while (__atomic_compare_exchange_n(&prepared_outgoing_used[current], &wanted, -2, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE) == false) {
+                current += 1;
+                if (current == BSEND_AMOUNT) {
+                    // all prepared buffers are used, try to free some
+                    pairring_pop_all(pr, node, local_thread_id, dict, dict_size, is_insert, maxres, k1, k2, nres);
+                    if (node == 0 && local_thread_id == 0) {
+                        try_send_buffers(pr, dict, dict_size, is_insert, maxres, k1, k2, nres);
+                        try_recieve_buffers(pr, dict, dict_size, is_insert, maxres, k1, k2, nres);
+                    } else {
+                        try_clear_recieve_buffer(node, local_thread_id, pr, dict, dict_size, is_insert, maxres, k1, k2, nres);
+                    }
+                    current = 0;
+                }
+            }
+            memcpy(prepared_outgoing_buffers[current], buffers[node][to_rank % GROUPS_COUNT_FILL], BUFFER_SIZE * sizeof(u64));
+            __atomic_store_n(&prepared_outgoing_used[current], to_rank, __ATOMIC_RELEASE);
+            // reset buffer index
+            __atomic_store_n(&buffer_indices[node][to_rank % GROUPS_COUNT_FILL], 0, __ATOMIC_RELEASE);
+        } else {
+            if (count == 0) {
+                return;
+            }
+            while (__atomic_load_n(&buffer_indices[node][to_rank % GROUPS_COUNT_FILL], __ATOMIC_ACQUIRE) >= BUFFER_SIZE) {
+                // not enough space in buffer, try to pop some entries locally to avoid deadlock
+                pairring_pop_all(pr, node, local_thread_id, dict, dict_size, is_insert, maxres, k1, k2, nres);
+                if (node == 0 && local_thread_id == 0) {
+                    try_send_buffers(pr, dict, dict_size, is_insert, maxres, k1, k2, nres);
+                    try_recieve_buffers(pr, dict, dict_size, is_insert, maxres, k1, k2, nres);
+                } else {
+                    try_clear_recieve_buffer(node, local_thread_id, pr, dict, dict_size, is_insert, maxres, k1, k2, nres);
+                }
+            }
         }
-        entries += to_copy;
-        count -= to_copy;
-    } else {
-        __atomic_fetch_sub(&writers[node][to_rank % GROUPS_COUNT_FILL], 1, __ATOMIC_RELEASE);
     }
-    if (node == 0 && local_thread_id == 0) {
-        // wait for other writers to complete
-        while (__atomic_load_n(&writers[node][to_rank % GROUPS_COUNT_FILL], __ATOMIC_ACQUIRE) > 0) {
-            // busy wait
-        }
-        // we need to send the buffer
-        send_buffer(node, to_rank, pr, dict, dict_size, is_insert, maxres, k1, k2, nres);
-        __atomic_store_n(&buffer_indices[node][to_rank % GROUPS_COUNT_FILL], 0, __ATOMIC_RELEASE);
-    } else {
-        while (__atomic_load_n(&buffer_indices[node][to_rank % GROUPS_COUNT_FILL], __ATOMIC_ACQUIRE) >= BUFFER_SIZE) {
-            // not enough space in buffer, try to pop some entries locally to avoid deadlock
-            pairring_pop_all(pr, node, local_thread_id, dict, dict_size, is_insert, maxres, k1, k2, nres);
-            try_clear_recieve_buffer(node, local_thread_id, pr, dict, dict_size, is_insert, maxres, k1, k2, nres);
-        }
-    }
-    // try again
-    buffer_add_multiple(entries, count, to_rank, node, local_thread_id, dict, dict_size, is_insert, maxres, k1, k2, nres, pr);
 }
 
 void try_send_buffers(struct QueuePairs* pairrings, struct entry* dict, u64 dict_size, int is_insert, int maxres, u64* k1, u64* k2, int* nres) {
-    for (int node = 0; node < numa_nodes; node++) {
-        int start = rank - (rank % GROUPS_COUNT_FILL);
-        for (int to_rank = start; to_rank < start + GROUPS_COUNT_FILL; to_rank++) {
-            if (__atomic_load_n(&buffer_indices[node][to_rank % GROUPS_COUNT_FILL], __ATOMIC_ACQUIRE) >= BUFFER_SIZE) {
-                // wait for other writers to complete
-                while (__atomic_load_n(&writers[node][to_rank % GROUPS_COUNT_FILL], __ATOMIC_ACQUIRE) > 0) {
-                    // busy wait
-                }
-                // we need to send the buffer
-                send_buffer(node, to_rank, pairrings, dict, dict_size, is_insert, maxres, k1, k2, nres);
-                __atomic_store_n(&buffer_indices[node][to_rank % GROUPS_COUNT_FILL], 0, __ATOMIC_RELEASE);
-            }
+    for (int i = 0; i < BSEND_AMOUNT; i++) {
+        int to_rank = __atomic_load_n(&prepared_outgoing_used[i], __ATOMIC_ACQUIRE);
+        if (to_rank >= 0) {
+            // we need to send the buffer
+            send_buffer(i, to_rank, pairrings, dict, dict_size, is_insert, maxres, k1, k2, nres);
         }
     }
 }
