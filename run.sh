@@ -5,7 +5,7 @@
 #OAR -E results/mitm_OAR_%jobid%.err
 #OAR -p paradoxe
 
-N=30
+N=32
 REDUCE=0
 
 BLOCK_SIZE=65536
