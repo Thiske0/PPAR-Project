@@ -1,0 +1,8 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.300/27
+Running with n=27, C0=(57708e54, 8978da82) and C1=(135ff13e, da605928)
+Dictionary size: 1.8GB
+Fill: 13.906s
+SOLUTION FOUND!
+Probe: 45.869s. 134202873 candidate pairs tested
+Total time: 60.194s
+Solution found: (7931002, d55b19) [checked OK]

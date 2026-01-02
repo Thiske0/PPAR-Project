@@ -5,12 +5,12 @@
 #OAR -E results/mitm_OAR_%jobid%.err
 #OAR -p paradoxe
 
-N=30
+N=27
 REDUCE=0
-PROG=mitm_mpi_grouped
+PROG=mitm_vectorized
 
 THREADS=(104)
-HOSTS=(2)
+HOSTS=(1)
 
 # Optimal parameters for Paradoxe cluster for mitm_numa_no_comm
 #BLOCK_SIZE=131072
@@ -63,6 +63,6 @@ for host in "${HOSTS[@]}"; do
             --mca pml ob1 \
             --mca btl ^openib \
             --rankfile $reduced_rank_file \
-            ./$PROG --n $N --online --reduce $REDUCE
+            ./$PROG --n $N --online
     done
 done
