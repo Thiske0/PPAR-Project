@@ -59,6 +59,16 @@ Probe: 1.254s
 Total time: 2.511s
 Solution found: (40366a0, 1730762) [checked OK]
 Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.734/27
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.12/27
+Running with n=27, C0=(f23c15b9, 75218c3a) and C1=(028ecd03, a17d693e)
+Using 1 processes, 2 numa nodes, 48 threads and vector size 32
+Dictionary size: 2 x 906.0MB
+Processing chunk 1/1...
+Fill: 0.732s
+SOLUTION FOUND!
+Probe: 1.236s
+Total time: 2.487s
+Solution found: (2f04363, 1be8611) [checked OK]
 Running with n=27, C0=(919182a7, 9f675c39) and C1=(d3aba63d, 92522511)
 Using 1 processes, 2 numa nodes, 52 threads and vector size 32
 Dictionary size: 2 x 906.0MB

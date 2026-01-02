@@ -1,0 +1,48 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.251/30
+Running with n=30, C0=(9d11846d, b4812dda) and C1=(e81e9e39, 301cfddb)
+Using 2 processes, 104 threads and vector size 32
+Using 2 groups for fill, 2 groups for probe
+Dictionary size: 7.2GB
+Processing chunk 1/1...
+Chunk 1 Fill: 2.342s
+SOLUTION FOUND!
+Chunk 1 Probe: 5.505s
+Total time: 7.991s
+Total candidate pairs tested: 1073815843
+Solution found: (27792474, 2750703d) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.635/30
+Running with n=30, C0=(85c4d664, 4126332a) and C1=(7f5499ab, ae2e559d)
+Using 4 processes, 104 threads and vector size 32
+Using 4 groups for fill, 4 groups for probe
+Dictionary size: 3.6GB
+Processing chunk 1/1...
+Chunk 1 Fill: 1.266s
+SOLUTION FOUND!
+Chunk 1 Probe: 2.668s
+Total time: 4.084s
+Total candidate pairs tested: 1073727182
+Solution found: (6536374, 1d56e336) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.102/30
+Running with n=30, C0=(49c2f08d, 6ecd0ab4) and C1=(c8696424, 487cf7bf)
+Using 8 processes, 104 threads and vector size 32
+Using 8 groups for fill, 8 groups for probe
+Dictionary size: 1.8GB
+Processing chunk 1/1...
+Chunk 1 Fill: 0.740s
+SOLUTION FOUND!
+Chunk 1 Probe: 1.324s
+Total time: 2.247s
+Total candidate pairs tested: 1073686470
+Solution found: (5925c8a, 26a8bfd0) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.511/30
+Running with n=30, C0=(f3e20d8f, 6b675ee7) and C1=(2d55b527, d5737f8f)
+Using 16 processes, 104 threads and vector size 32
+Using 16 groups for fill, 16 groups for probe
+Dictionary size: 906.0MB
+Processing chunk 1/1...
+Chunk 1 Fill: 0.438s
+SOLUTION FOUND!
+Chunk 1 Probe: 0.686s
+Total time: 1.458s
+Total candidate pairs tested: 1073734743
+Solution found: (3fc58e5f, 3dd8b0f3) [checked OK]

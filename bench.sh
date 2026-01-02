@@ -5,11 +5,12 @@
 #OAR -E results/mitm_OAR_%jobid%.err
 #OAR -p paradoxe
 
-N=27
-PROG=mitm_numa
+N=30
+REDUCE=0
+PROG=mitm_mpi_grouped
 
 THREADS=(104)
-HOSTS=(1) # 2 4 8 16 32)
+HOSTS=(2)
 
 # Optimal parameters for Paradoxe cluster for mitm_numa_no_comm
 #BLOCK_SIZE=131072
@@ -26,9 +27,6 @@ BSEND_AMOUNT=20
 
 set -euo pipefail
 IFS=$'\n\t'
-
-./make_header --fill-groups $GROUPS_COUNT_FILL --probe-groups $GROUPS_COUNT_PROBE --block-size $BLOCK_SIZE --buffer-size $BUFFER_SIZE --queue-size $QUEUE_SIZE --bsend-amount $BSEND_AMOUNT --prefill-buffer-size $PREFILL_BUFFER_SIZE
-
 
 gcc -Wall -o make_header make_header.c
 
@@ -49,11 +47,13 @@ for node in "${NODES[@]}"; do
 done
 
 # We compile and run on the compute nodes because of the -march=native flag
-mpicc -O3 -march=native -Wall -o $PROG $PROG.c -fopenmp -lnuma
 
 for host in "${HOSTS[@]}"; do
-    reduced_host_file=$(mktemp)
-    head -n $host $OAR_NODEFILE > $reduced_host_file
+    reduced_rank_file=$(mktemp)
+    head -n $host $tmp_rankfile > $reduced_rank_file
+
+    ./make_header --fill-groups $GROUPS_COUNT_FILL --probe-groups $GROUPS_COUNT_PROBE --block-size $BLOCK_SIZE --buffer-size $BUFFER_SIZE --queue-size $QUEUE_SIZE --bsend-amount $BSEND_AMOUNT --prefill-buffer-size $PREFILL_BUFFER_SIZE
+    mpicc -O3 -march=native -Wall -o $PROG $PROG.c -fopenmp -lnuma
 
     for threads in "${THREADS[@]}"; do
 
@@ -62,9 +62,7 @@ for host in "${HOSTS[@]}"; do
             --mca plm_rsh_agent oarsh \
             --mca pml ob1 \
             --mca btl ^openib \
-            --bind-to none \
-            --map-by ppr:1:node \
-            --hostfile $reduced_host_file \
-            ./$PROG --n $N --online
+            --rankfile $reduced_rank_file \
+            ./$PROG --n $N --online --reduce $REDUCE
     done
 done

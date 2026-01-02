@@ -61,6 +61,15 @@ SOLUTION FOUND!
 Probe: 2.2s. 134206990 candidate pairs tested
 Total time: 3.335s
 Solution found: (61099c0, d5f93c) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.602/27
+Running with n=27, C0=(7c5984ec, 53addeda) and C1=(2e8b475c, 202ccbae)
+Using 96 threads and vector size 32
+Dictionary size: 1.8GB
+Fill: 0.8s
+SOLUTION FOUND!
+Probe: 2.1s. 134209772 candidate pairs tested
+Total time: 3.202s
+Solution found: (7bb66e, 7d7d130) [checked OK]
 Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.400/27
 Running with n=27, C0=(319872af, 0af1612f) and C1=(a9c8a5e8, ff99a953)
 Using 104 threads and vector size 32
