@@ -478,7 +478,7 @@ void spsc_push_many(struct SPSC_Ring* r, const struct queue_entry* src, size_t c
     while (true) {
         head = __atomic_load_n(&r->head, __ATOMIC_ACQUIRE);
         tail = __atomic_load_n(&r->tail, __ATOMIC_RELAXED);
-        free_entries = QUEUE_SIZE - (tail - head);
+        free_entries = QUEUE_SIZE - ((tail - head) & (QUEUE_SIZE - 1)) - 1;
         if (free_entries >= count)
             break;
         // not enough space in remote queue, try to pop some entries locally to avoid deadlock
@@ -1233,10 +1233,12 @@ int main(int argc, char** argv) {
     assert(BUFFER_SIZE < 1 << 30);
     assert(BLOCK_SIZE < 1 << 20);
     assert(QUEUE_SIZE < 1 << 30);
+    assert((QUEUE_SIZE & (QUEUE_SIZE - 1)) == 0); // power of two
     assert(world_size % GROUPS_COUNT_FILL == 0);
     assert(GROUPS_COUNT_FILL == GROUPS_COUNT_PROBE);
 
     process_command_line_options(argc, argv);
+    assert(omp_get_max_threads() % numa_nodes == 0);
     num_threads = omp_get_max_threads() / numa_nodes;
 
     if (rank == 0) {
