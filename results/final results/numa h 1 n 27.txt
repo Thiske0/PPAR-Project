@@ -1,0 +1,70 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.867/27
+Running with n=27, C0=(02c42a99, ad73c512) and C1=(af797b1f, e9858dde)
+Using 1 processes, 2 numa nodes, 1 threads and vector size 32
+Dictionary size: 2 x 906.0MB
+Processing chunk 1/1...
+Fill: 10.423s
+SOLUTION FOUND!
+Probe: 22.211s
+Total time: 32.908s
+Solution found: (662564f, 1de1d5f) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.639/27
+Running with n=27, C0=(32c989e0, c8a38902) and C1=(c51dd71b, 9c0b608b)
+Using 1 processes, 2 numa nodes, 2 threads and vector size 32
+Dictionary size: 2 x 906.0MB
+Processing chunk 1/1...
+Fill: 5.254s
+SOLUTION FOUND!
+Probe: 11.299s
+Total time: 16.767s
+Solution found: (6743d2a, 5f96677) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.983/27
+Running with n=27, C0=(401bab50, 9207cb2e) and C1=(cee99f0b, a773a85e)
+Using 1 processes, 2 numa nodes, 4 threads and vector size 32
+Dictionary size: 2 x 906.0MB
+Processing chunk 1/1...
+Fill: 2.666s
+SOLUTION FOUND!
+Probe: 5.757s
+Total time: 8.560s
+Solution found: (6390fbf, 65a41ed) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.650/27
+Running with n=27, C0=(e668f046, 4af67d07) and C1=(a02c9237, 61b36c7e)
+Using 1 processes, 2 numa nodes, 8 threads and vector size 32
+Dictionary size: 2 x 906.0MB
+Processing chunk 1/1...
+Fill: 1.552s
+SOLUTION FOUND!
+Probe: 3.014s
+Total time: 4.690s
+Solution found: (6cd07b5, cd84c0) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.609/27
+Running with n=27, C0=(b4350daa, f7207d78) and C1=(79f323a0, 3ae221a7)
+Using 1 processes, 2 numa nodes, 16 threads and vector size 32
+Dictionary size: 2 x 906.0MB
+Processing chunk 1/1...
+Fill: 1.119s
+SOLUTION FOUND!
+Probe: 1.672s
+Total time: 2.907s
+Solution found: (25ecc28, 4124f9d) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.806/27
+Running with n=27, C0=(417c742a, 7fbfd75c) and C1=(4ba96a86, ccfbd730)
+Using 1 processes, 2 numa nodes, 32 threads and vector size 32
+Dictionary size: 2 x 906.0MB
+Processing chunk 1/1...
+Fill: 1.144s
+SOLUTION FOUND!
+Probe: 1.254s
+Total time: 2.511s
+Solution found: (40366a0, 1730762) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.734/27
+Running with n=27, C0=(919182a7, 9f675c39) and C1=(d3aba63d, 92522511)
+Using 1 processes, 2 numa nodes, 52 threads and vector size 32
+Dictionary size: 2 x 906.0MB
+Processing chunk 1/1...
+Fill: 0.478s
+SOLUTION FOUND!
+Probe: 0.992s
+Total time: 1.586s
+Solution found: (c73009, 7e46dbf) [checked OK]

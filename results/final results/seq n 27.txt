@@ -1,0 +1,7 @@
+Running with n=27, C0=(cb386690, d825c668) and C1=(2f5ac95a, 2edd9a18)
+Dictionary size: 1.8GB
+Fill: 21.8s
+SOLUTION FOUND!
+Probe: 49.3s. 134204314 candidate pairs tested
+Total time: 71.525s
+Solution found: (5756c93, 50654b1) [checked OK]

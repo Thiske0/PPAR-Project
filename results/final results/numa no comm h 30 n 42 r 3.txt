@@ -1,0 +1,31 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.511/42
+Running with n=42, C0=(c2624eb4, 930d476e) and C1=(62b0048b, af6e4c82)
+Using 30 processes, 2 numa nodes, 52 threads and vector size 32
+Dictionary size: 2 x 123.7GB
+Processing chunk 1/8...
+Fill: 141.274s
+SOLUTION FOUND!
+Probe: 1508.839s
+Processing chunk 2/8...
+Fill: 139.803s
+Probe: 1500.991s
+Processing chunk 3/8...
+Fill: 140.074s
+Probe: 1500.702s
+Processing chunk 4/8...
+Fill: 140.202s
+Probe: 1500.227s
+Processing chunk 5/8...
+Fill: 140.015s
+Probe: 1501.191s
+Processing chunk 6/8...
+Fill: 140.035s
+Probe: 1500.867s
+Processing chunk 7/8...
+Fill: 139.985s
+Probe: 1503.878s
+Processing chunk 8/8...
+Fill: 139.739s
+Probe: 1507.110s
+Total time: 13636.850s
+Solution found: (58ce589896, 2393c73f6aa) [checked OK]

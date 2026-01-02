@@ -11,3 +11,4 @@ mitm_mpi
 mitm_omp
 mitm_seq
 make_header
+mitm_numa_no_comm

@@ -340,12 +340,17 @@ int main(int argc, char** argv) {
     printf("Running with n=%d, C0=(%08x, %08x) and C1=(%08x, %08x)\n",
         (int)n, C[0][0], C[0][1], C[1][0], C[1][1]);
 
+    double start_time = wtime();
+
     dict_setup(1.125 * (1ull << n));
 
     /* search */
     u64 k1[16], k2[16];
     int nkey = golden_claw_search(16, k1, k2);
     assert(nkey > 0);
+
+    double end_time = wtime();
+    printf("Total time: %.3fs\n", end_time - start_time);
 
     /* validation */
     for (int i = 0; i < nkey; i++) {

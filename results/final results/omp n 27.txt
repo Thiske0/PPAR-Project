@@ -1,0 +1,72 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.100/27
+Running with n=27, C0=(eb0535b9, a3d93e87) and C1=(d52407e6, 5a57fc14)
+Using 1 threads and vector size 32
+Dictionary size: 1.8GB
+Fill: 18.9s
+SOLUTION FOUND!
+Probe: 41.4s. 134216663 candidate pairs tested
+Total time: 60.713s
+Solution found: (38589ed, 5a9250e) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.62/27
+Running with n=27, C0=(5f8bffb0, dd0e9cb9) and C1=(6d503019, 41962646)
+Using 2 threads and vector size 32
+Dictionary size: 1.8GB
+Fill: 9.5s
+SOLUTION FOUND!
+Probe: 20.9s. 134231209 candidate pairs tested
+Total time: 30.710s
+Solution found: (f82790, 5729b33) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.695/27
+Running with n=27, C0=(0912d774, 44cd3431) and C1=(9ec0086a, ce625317)
+Using 4 threads and vector size 32
+Dictionary size: 1.8GB
+Fill: 5.5s
+SOLUTION FOUND!
+Probe: 12.6s. 134217586 candidate pairs tested
+Total time: 18.299s
+Solution found: (7ed3944, fe27f0) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.238/27
+Running with n=27, C0=(278a5ce5, 9abbe965) and C1=(e9183fe3, 72a72854)
+Using 8 threads and vector size 32
+Dictionary size: 1.8GB
+Fill: 2.8s
+SOLUTION FOUND!
+Probe: 6.7s. 134190204 candidate pairs tested
+Total time: 9.597s
+Solution found: (7f25e47, 198cb49) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.69/27
+Running with n=27, C0=(3295bc07, c7422db5) and C1=(842013a9, b8b29985)
+Using 16 threads and vector size 32
+Dictionary size: 1.8GB
+Fill: 1.4s
+SOLUTION FOUND!
+Probe: 3.7s. 134220040 candidate pairs tested
+Total time: 5.325s
+Solution found: (2372af8, 70ba68b) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.785/27
+Running with n=27, C0=(590c0e32, 6d72cd0d) and C1=(48111c3f, 16265bcc)
+Using 32 threads and vector size 32
+Dictionary size: 1.8GB
+Fill: 0.9s
+SOLUTION FOUND!
+Probe: 2.4s. 134208880 candidate pairs tested
+Total time: 3.850s
+Solution found: (2ce1032, 27c1bcc) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.596/27
+Running with n=27, C0=(6f7305b7, 00076850) and C1=(e55f545e, 5435dbca)
+Using 64 threads and vector size 32
+Dictionary size: 1.8GB
+Fill: 1.0s
+SOLUTION FOUND!
+Probe: 2.2s. 134206990 candidate pairs tested
+Total time: 3.335s
+Solution found: (61099c0, d5f93c) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.400/27
+Running with n=27, C0=(319872af, 0af1612f) and C1=(a9c8a5e8, ff99a953)
+Using 104 threads and vector size 32
+Dictionary size: 1.8GB
+Fill: 0.7s
+SOLUTION FOUND!
+Probe: 1.5s. 134211828 candidate pairs tested
+Total time: 2.597s
+Solution found: (7872e08, 69d30bb) [checked OK]

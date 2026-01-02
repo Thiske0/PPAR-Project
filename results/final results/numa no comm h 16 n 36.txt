@@ -1,0 +1,10 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.833/36
+Running with n=36, C0=(5801bd90, 1c6ea367) and C1=(e551812f, b872a25b)
+Using 16 processes, 2 numa nodes, 52 threads and vector size 32
+Dictionary size: 2 x 29.0GB
+Processing chunk 1/1...
+Fill: 25.096s
+SOLUTION FOUND!
+Probe: 43.656s
+Total time: 70.714s
+Solution found: (8a472611, 99fc64f5e) [checked OK]

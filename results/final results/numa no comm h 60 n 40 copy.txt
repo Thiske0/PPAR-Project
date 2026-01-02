@@ -1,0 +1,9 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.40/40
+Running with n=40, C0=(ec77cd63, 52678a23) and C1=(9f2166fb, e4a31013)
+Using 60 processes, 2 numa nodes, 52 threads and vector size 32
+Dictionary size: 2 x 123.7GB
+Fill: 250.943s
+SOLUTION FOUND!
+Probe: 364.818s
+Total time: 644.516s
+Solution found: (eb33b4b344, ae8e25ef7a) [checked OK]

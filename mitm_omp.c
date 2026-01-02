@@ -199,7 +199,7 @@ void dict_setup(u64 size) {
         fprintf(stderr, "impossible to allocate the dictionnary");
         exit(1);
     }
-    
+
 #pragma omp parallel for schedule(dynamic, 8192)
     for (u64 i = 0; i < dict_size; i++)
         A[i].k = EMPTY;
@@ -497,12 +497,17 @@ int main(int argc, char** argv) {
     int num_threads = omp_get_max_threads();
     printf("Using %d threads and vector size %d\n", num_threads, VECTOR_SIZE);
 
+    double start_time = wtime();
+
     dict_setup(1.125 * (1ull << n));
 
     /* search */
     u64 k1[16], k2[16];
     int nkey = golden_claw_search(16, k1, k2);
     assert(nkey > 0);
+
+    double end_time = wtime();
+    printf("Total time: %.3fs\n", end_time - start_time);
 
     /* validation */
     for (int i = 0; i < nkey; i++) {
