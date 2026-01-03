@@ -5,18 +5,18 @@
 #OAR -E results/mitm_OAR_%jobid%.err
 #OAR -p paradoxe
 
-N=27
+N=30
 REDUCE=0
-PROG=mitm_vectorized
+PROG=mitm_numa_no_comm
 
 THREADS=(104)
-HOSTS=(1)
+HOSTS=(16)
 
 # Optimal parameters for Paradoxe cluster for mitm_numa_no_comm
-#BLOCK_SIZE=131072
+BLOCK_SIZE=131072
 
 # Optimal parameters for Paradoxe cluster for mitm_numa
-BLOCK_SIZE=1024
+#BLOCK_SIZE=1024
 QUEUE_SIZE=8192
 BUFFER_SIZE=131072
 PREFILL_BUFFER_SIZE=128

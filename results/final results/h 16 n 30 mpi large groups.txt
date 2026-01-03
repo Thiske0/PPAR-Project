@@ -1,0 +1,64 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.317/30
+Running with n=30, C0=(d3358b58, 2426cb85) and C1=(9cfddd97, edd5f712)
+Using 16 processes, 104 threads and vector size 32
+Using 1 groups for fill, 1 groups for probe
+Dictionary size: 906.0MB
+Processing chunk 1/1...
+Chunk 1 Fill: 8.897s
+SOLUTION FOUND!
+Chunk 1 Probe: 5.902s
+Total time: 15.589s
+Total candidate pairs tested: 1073721313
+Solution found: (2545f38f, a9a6478) [checked OK]
+
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.28/30
+Running with n=30, C0=(8e769bbf, d2ca4f18) and C1=(9615d08d, aaa99b3a)
+Using 16 processes, 104 threads and vector size 32
+Using 2 groups for fill, 2 groups for probe
+Dictionary size: 906.0MB
+Processing chunk 1/1...
+Chunk 1 Fill: 11.757s
+SOLUTION FOUND!
+Chunk 1 Probe: 5.280s
+Total time: 17.075s
+Total candidate pairs tested: 1073708067
+Solution found: (299897eb, 30a83990) [checked OK]
+
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.783/30
+Running with n=30, C0=(815f1870, cae99c0a) and C1=(7139cf53, 8103cbac)
+Using 16 processes, 104 threads and vector size 32
+Using 4 groups for fill, 4 groups for probe
+Dictionary size: 906.0MB
+Processing chunk 1/1...
+Chunk 1 Fill: 12.083s
+SOLUTION FOUND!
+Chunk 1 Probe: 5.889s
+Total time: 23.994s
+Total candidate pairs tested: 1073701952
+Solution found: (19c2f6ba, 2c5a242c) [checked OK]
+
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.554/30
+Running with n=30, C0=(8141aa99, 965165ee) and C1=(3e556799, 7484d43f)
+Using 16 processes, 104 threads and vector size 32
+Using 8 groups for fill, 8 groups for probe
+Dictionary size: 906.0MB
+Processing chunk 1/1...
+Chunk 1 Fill: 11.329s
+SOLUTION FOUND!
+Chunk 1 Probe: 5.152s
+Total time: 20.527s
+Total candidate pairs tested: 1073731604
+Solution found: (2b25419e, 1e524f10) [checked OK]
+
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.247/30
+Running with n=30, C0=(a708cea8, 357f622f) and C1=(18a9e451, b16b28ae)
+Using 16 processes, 104 threads and vector size 32
+Using 16 groups for fill, 16 groups for probe
+Dictionary size: 906.0MB
+Processing chunk 1/1...
+Chunk 1 Fill: 0.432s
+SOLUTION FOUND!
+Chunk 1 Probe: 0.698s
+Total time: 1.162s
+Total candidate pairs tested: 1073702079
+Solution found: (a499b7e, 1f0eed26) [checked OK]

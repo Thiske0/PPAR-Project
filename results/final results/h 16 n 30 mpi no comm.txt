@@ -1,3 +1,12 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.458/30
+Running with n=30, C0=(b82d4e74, b0d25509) and C1=(efee9391, c7d8f9ac)
+Using 104 threads and vector size 32
+Dictionary size: 14.5GB
+Fill: 4.5s
+SOLUTION FOUND!
+Probe: 11.2s. 1073763701 candidate pairs tested
+Total time: 18.392s
+Solution found: (335bfc53, 734a736) [checked OK]
 Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.251/30
 Running with n=30, C0=(9d11846d, b4812dda) and C1=(e81e9e39, 301cfddb)
 Using 2 processes, 104 threads and vector size 32

@@ -1,0 +1,55 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.611/30
+Running with n=30, C0=(e1762056, f8496505) and C1=(e1a9adc7, af862dea)
+Using 16 processes, 2 numa nodes, 52 threads and vector size 32
+Using 1 groups
+Dictionary size: 2 x 483.2MB
+Processing chunk 1/1...
+Fill: 0.415s
+SOLUTION FOUND!
+Probe: 0.545s
+Total time: 1.475s
+Solution found: (26a777f5, f9043fc) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.583/30
+Running with n=30, C0=(d1315d18, dffdca73) and C1=(ea5cced4, 233e8855)
+Using 16 processes, 2 numa nodes, 52 threads and vector size 32
+Using 2 groups
+Dictionary size: 2 x 483.2MB
+Processing chunk 1/1...
+Fill: 0.839s
+SOLUTION FOUND!
+Probe: 1.038s
+Total time: 2.373s
+Solution found: (3b7a78cc, 20a8a191) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.199/30
+Running with n=30, C0=(96ec710d, 7cfad94a) and C1=(2758d310, 6d4dc171)
+Using 16 processes, 2 numa nodes, 52 threads and vector size 32
+Using 4 groups
+Dictionary size: 2 x 483.2MB
+Processing chunk 1/1...
+Fill: 0.883s
+SOLUTION FOUND!
+Probe: 1.079s
+Total time: 2.493s
+Solution found: (b47c31b, 29312c45) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.99/30
+Running with n=30, C0=(2c3be9fe, 54e1e2ae) and C1=(00fa0bd5, e99aac53)
+Using 16 processes, 2 numa nodes, 52 threads and vector size 32
+Using 8 groups
+Dictionary size: 2 x 483.2MB
+Processing chunk 1/1...
+Fill: 3.753s
+SOLUTION FOUND!
+Probe: 5.046s
+Total time: 9.352s
+Solution found: (9aa830, 30b7f460) [checked OK]
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.579/30
+Running with n=30, C0=(61d74403, 373ea284) and C1=(2ba98ff7, aa3a42b4)
+Using 16 processes, 2 numa nodes, 52 threads and vector size 32
+Using 16 groups
+Dictionary size: 2 x 483.2MB
+Processing chunk 1/1...
+Fill: 5.235s
+SOLUTION FOUND!
+Probe: 5.530s
+Total time: 11.287s
+Solution found: (1e19201d, 242d70bd) [checked OK]

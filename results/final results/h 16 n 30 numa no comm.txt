@@ -1,3 +1,13 @@
+Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.558/30
+Running with n=30, C0=(3094c327, 37ab7151) and C1=(a4c1f7bf, 7a6481c4)
+Using 1 processes, 2 numa nodes, 52 threads and vector size 32
+Dictionary size: 2 x 7.2GB
+Processing chunk 1/1...
+Fill: 3.821s
+SOLUTION FOUND!
+Probe: 8.907s
+Total time: 13.121s
+Solution found: (3d26a454, 1b762b53) [checked OK]
 Fetching problem from https://ppar.tme-crypto.fr/mathis.poppe.411/30
 Running with n=30, C0=(50f8d7d4, c0db63d5) and C1=(b7444935, 1220fffc)
 Using 2 processes, 2 numa nodes, 52 threads and vector size 32
